@@ -1,0 +1,711 @@
+package com.example.wordbook.ui
+
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Check
+import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.VolumeUp
+import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.Button
+import androidx.compose.material3.Card
+import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
+import androidx.compose.material3.LinearProgressIndicator
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedButton
+import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.RadioButton
+import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.collectAsState
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.mutableStateListOf
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
+import com.example.wordbook.WordBookViewModel
+import com.example.wordbook.data.AiProviders
+import com.example.wordbook.data.Word
+import com.example.wordbook.util.WordTextUtils
+
+/** 今日复习：艾宾浩斯到期列表；每词：🔊发音 + ✓记住了 + ✕没记住 */
+@Composable
+fun ReviewDialog(vm: WordBookViewModel, onSpeak: (String) -> Unit, onClose: () -> Unit) {
+    val stats by vm.stats.collectAsState()
+    AlertDialog(
+        onDismissRequest = onClose,
+        title = { Text("今日复习（艾宾浩斯）") },
+        text = {
+            if (stats.dueWords.isEmpty()) {
+                Text("今天的复习计划已完成 🎉\n\n该复习的词：加入后第 1、2、4、7、15、30 天各复习一次")
+            } else {
+                Column(
+                    verticalArrangement = Arrangement.spacedBy(6.dp),
+                    modifier = Modifier
+                        .verticalScroll(rememberScrollState())
+                        .heightIn(max = 380.dp)
+                ) {
+                    stats.dueWords.forEach { word ->
+                        Card {
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically,
+                                modifier = Modifier.fillMaxWidth().padding(horizontal = 10.dp)
+                            ) {
+                                Column(modifier = Modifier.weight(1f)) {
+                                    Text(word.spelling, fontWeight = FontWeight.SemiBold)
+                                    Text(
+                                        "答对 ${word.reviewCorrectCount} 次",
+                                        fontSize = 11.sp,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                                    )
+                                }
+                                IconButton(onClick = { onSpeak(word.spelling) }) {
+                                    Icon(
+                                        Icons.Filled.VolumeUp,
+                                        contentDescription = "发音",
+                                        tint = SpeakBlue
+                                    )
+                                }
+                                IconButton(onClick = { vm.markReviewed(word, true) }) {
+                                    Icon(
+                                        Icons.Filled.Check,
+                                        contentDescription = "记住了",
+                                        tint = MaterialTheme.colorScheme.primary
+                                    )
+                                }
+                                IconButton(onClick = { vm.markReviewed(word, false) }) {
+                                    Icon(
+                                        Icons.Filled.Close,
+                                        contentDescription = "没记住",
+                                        tint = MaterialTheme.colorScheme.error
+                                    )
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        confirmButton = { TextButton(onClick = onClose) { Text("完成") } }
+    )
+}
+
+/** 随机抽测：盖释义 + 记住了/没记住，结果写入艾宾浩斯调度 */
+@Composable
+fun QuizDialog(vm: WordBookViewModel, onSpeak: (String) -> Unit, onClose: () -> Unit) {
+    var current by remember { mutableStateOf<Word?>(null) }
+    var revealed by remember { mutableStateOf(false) }
+    var finished by remember { mutableStateOf(false) }
+    var seenCount by remember { mutableIntStateOf(0) }
+    val seen = remember { mutableStateListOf<Long>() }
+
+    fun loadNext() {
+        revealed = false
+        vm.quizNext(seen.toSet()) { next ->
+            if (next == null) {
+                finished = true
+            } else {
+                seen.add(next.id)
+                seenCount++
+                current = next
+            }
+        }
+    }
+
+    LaunchedEffect(Unit) { loadNext() }
+
+    AlertDialog(
+        onDismissRequest = onClose,
+        title = { Text("随机抽测") },
+        text = {
+            when {
+                finished -> Text(
+                    if (seenCount > 1) "本轮刷完 ${seenCount - 1} 个没记牢的词，明天继续！"
+                    else "词库里还没有「学习中」的单词可以抽测"
+                )
+                current == null -> Row(verticalAlignment = Alignment.CenterVertically) {
+                    CircularProgressIndicator(Modifier.size(18.dp))
+                    Text(" 出题中…", fontSize = 13.sp)
+                }
+                else -> {
+                    val word = current!!
+                    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Text(word.spelling, fontSize = 26.sp, fontWeight = FontWeight.SemiBold)
+                            IconButton(onClick = { onSpeak(word.spelling) }) {
+                                Icon(Icons.Filled.VolumeUp, contentDescription = "发音", tint = SpeakBlue)
+                            }
+                            Text(
+                                "第 ${seenCount} 题",
+                                fontSize = 12.sp,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
+                        if (word.phonetic.isNotBlank()) {
+                            Text(word.phonetic, fontSize = 13.sp)
+                        }
+                        if (revealed) {
+                            Text(word.meaning, fontSize = 15.sp)
+                            if (word.example.isNotBlank()) {
+                                Text(
+                                    word.example,
+                                    fontSize = 13.sp,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        confirmButton = {
+            val word = current
+            when {
+                finished -> TextButton(onClick = onClose) { Text("结束") }
+                word != null && !revealed -> TextButton(onClick = { revealed = true }) { Text("看释义") }
+                word != null && revealed -> Row {
+                    TextButton(onClick = {
+                        vm.markReviewed(word, false)
+                        loadNext()
+                    }) { Text("没记住") }
+                    Button(onClick = {
+                        vm.markReviewed(word, true)
+                        loadNext()
+                    }) { Text("记住了") }
+                }
+                else -> {}
+            }
+        },
+        dismissButton = {
+            if (!finished && current != null) {
+                TextButton(onClick = onClose) { Text("退出") }
+            }
+        }
+    )
+}
+
+/** 单词详情：全字段 + 点例句朗读 + 与 AI 多轮问答 */
+@Composable
+fun WordDetailDialog(vm: WordBookViewModel, word: Word, onSpeak: (String) -> Unit, onClose: () -> Unit) {
+    val msgs = remember(word.id) { mutableStateListOf<Pair<String, String>>() }
+    var input by remember { mutableStateOf("") }
+    var busy by remember { mutableStateOf(false) }
+
+    AlertDialog(
+        onDismissRequest = onClose,
+        title = {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text(word.spelling)
+                if (word.phonetic.isNotBlank()) {
+                    Text("  ${word.phonetic}", fontSize = 13.sp)
+                }
+                IconButton(onClick = { onSpeak(word.spelling) }) {
+                    Icon(Icons.Filled.VolumeUp, contentDescription = "发音", tint = SpeakBlue)
+                }
+            }
+        },
+        text = {
+            Column(
+                verticalArrangement = Arrangement.spacedBy(6.dp),
+                modifier = Modifier.verticalScroll(rememberScrollState()).heightIn(min = 320.dp)
+            ) {
+                if (word.meaning.isNotBlank()) Text(word.meaning, fontSize = 15.sp)
+                if (word.example.isNotBlank()) {
+                    Text(
+                        word.example,
+                        fontSize = 13.sp,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.clickable { onSpeak(word.example) },
+                        textAlign = TextAlign.Left
+                    )
+                    Text(
+                        "👆 点例句可朗读",
+                        fontSize = 11.sp,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+                if (word.mnemonic.isNotBlank()) Text("💡 ${word.mnemonic}", fontSize = 13.sp)
+                if (word.family.isNotBlank()) {
+                    Text(
+                        "🔗 同根词：${word.family}",
+                        fontSize = 13.sp,
+                        color = MaterialTheme.colorScheme.primary
+                    )
+                }
+
+                Text("🤖 与 AI 交流这个词", fontWeight = FontWeight.SemiBold, modifier = Modifier.padding(top = 6.dp))
+                if (msgs.isEmpty()) {
+                    Text(
+                        "试试：和 retain 区别？语气有多正式？再给一个例句？",
+                        fontSize = 12.sp,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+                msgs.forEach { (role, content) ->
+                    Text(
+                        (if (role == "user") "你： " else "AI： ") + content,
+                        fontSize = 13.sp,
+                        color = if (role == "user") MaterialTheme.colorScheme.primary
+                        else MaterialTheme.colorScheme.onSurface,
+                        modifier = Modifier.padding(top = 2.dp)
+                    )
+                }
+                if (busy) {
+                    CircularProgressIndicator(Modifier.size(16.dp))
+                }
+                Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(top = 4.dp)) {
+                    OutlinedTextField(
+                        value = input,
+                        onValueChange = { input = it },
+                        modifier = Modifier.weight(1f),
+                        placeholder = { Text("问点什么…", fontSize = 13.sp) },
+                        singleLine = true
+                    )
+                    TextButton(
+                        onClick = {
+                            val question = input.trim()
+                            if (question.isNotBlank() && !busy) {
+                                msgs.add("user" to question)
+                                input = ""
+                                busy = true
+                                vm.askAbout(word, msgs.toList()) { reply ->
+                                    busy = false
+                                    msgs.add("assistant" to (reply ?: "(AI 请求失败，检查右上角设置里的 API Key)"))
+                                }
+                            }
+                        },
+                        enabled = !busy
+                    ) { Text("发送") }
+                }
+            }
+        },
+        confirmButton = { TextButton(onClick = onClose) { Text("关闭") } }
+    )
+}
+
+/** 添加单词（支持分享/剪贴板/快捷方式预填）；AI 查词一键填全 */
+@Composable
+fun AddWordDialog(vm: WordBookViewModel, prefill: String = "", onClose: () -> Unit) {
+    var spelling by remember { mutableStateOf(prefill) }
+    var phonetic by remember { mutableStateOf("") }
+    var meaning by remember { mutableStateOf("") }
+    var example by remember { mutableStateOf("") }
+    var mnemonic by remember { mutableStateOf("") }
+    var family by remember { mutableStateOf("") }
+    var aiBusy by remember { mutableStateOf(false) }
+    var aiError by remember { mutableStateOf(false) }
+
+    AlertDialog(
+        onDismissRequest = onClose,
+        title = { Text(if (prefill.isBlank()) "添加单词" else "把「$prefill」存进词库") },
+        text = {
+            Column(
+                verticalArrangement = Arrangement.spacedBy(8.dp),
+                modifier = Modifier.verticalScroll(rememberScrollState())
+            ) {
+                OutlinedTextField(
+                    value = spelling,
+                    onValueChange = { spelling = it },
+                    label = { Text("单词") },
+                    modifier = Modifier.fillMaxWidth(),
+                    singleLine = true
+                )
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Button(
+                        onClick = {
+                            aiBusy = true
+                            aiError = false
+                            vm.aiLookup(spelling.trim()) { result ->
+                                if (result != null) {
+                                    phonetic = result.phonetic
+                                    meaning = result.meaning
+                                    example = result.example
+                                    mnemonic = result.mnemonic
+                                    family = WordTextUtils.familyText(result.family)
+                                } else {
+                                    aiError = true
+                                }
+                                aiBusy = false
+                            }
+                        },
+                        enabled = spelling.isNotBlank() && !aiBusy
+                    ) {
+                        if (aiBusy) {
+                            CircularProgressIndicator(modifier = Modifier.size(16.dp))
+                        } else {
+                            Text("🤖 AI 查词")
+                        }
+                    }
+                    if (aiError) {
+                        Text(
+                            "AI 查词失败（先在⚙️里填 API Key）",
+                            fontSize = 12.sp,
+                            color = MaterialTheme.colorScheme.error,
+                            modifier = Modifier.align(Alignment.CenterVertically)
+                        )
+                    }
+                }
+                OutlinedTextField(
+                    value = phonetic,
+                    onValueChange = { phonetic = it },
+                    label = { Text("音标") },
+                    modifier = Modifier.fillMaxWidth(),
+                    singleLine = true
+                )
+                OutlinedTextField(
+                    value = meaning,
+                    onValueChange = { meaning = it },
+                    label = { Text("释义") },
+                    modifier = Modifier.fillMaxWidth()
+                )
+                OutlinedTextField(
+                    value = example,
+                    onValueChange = { example = it },
+                    label = { Text("例句") },
+                    modifier = Modifier.fillMaxWidth()
+                )
+                OutlinedTextField(
+                    value = mnemonic,
+                    onValueChange = { mnemonic = it },
+                    label = { Text("记忆法") },
+                    modifier = Modifier.fillMaxWidth()
+                )
+                OutlinedTextField(
+                    value = family,
+                    onValueChange = { family = it },
+                    label = { Text("同根词（逗号分隔）") },
+                    modifier = Modifier.fillMaxWidth()
+                )
+            }
+        },
+        confirmButton = {
+            TextButton(
+                onClick = {
+                    if (spelling.isNotBlank()) {
+                        vm.addWord(
+                            Word(
+                                spelling = spelling.trim(),
+                                phonetic = phonetic.trim(),
+                                meaning = meaning.trim(),
+                                example = example.trim(),
+                                mnemonic = mnemonic.trim(),
+                                family = family.trim()
+                            )
+                        )
+                        onClose()
+                    }
+                },
+                enabled = spelling.isNotBlank()
+            ) { Text("保存") }
+        },
+        dismissButton = {
+            TextButton(onClick = onClose) { Text("取消") }
+        }
+    )
+}
+
+/**
+ * 批量 AI 查词：
+ * 阶段一（输入）粘贴词表 + 实时预览识别/重复/无效 → 开始
+ * 阶段二（进行/完成）进度、失败重试、取消（保留已完成）
+ */
+@Composable
+fun BatchAddDialog(vm: WordBookViewModel, onClose: () -> Unit) {
+    val state by vm.batch.collectAsState()
+    var input by remember { mutableStateOf("") }
+    val preview = remember(input) {
+        com.example.wordbook.util.WordTextUtils.parseBatch(input, emptySet(), WordBookViewModel.BATCH_MAX)
+    }
+    val hasKey = remember { vm.hasApiKey() }
+    val started = state.running || state.finished
+
+    AlertDialog(
+        onDismissRequest = onClose,
+        title = { Text("批量 AI 查词") },
+        text = {
+            Column(
+                verticalArrangement = Arrangement.spacedBy(8.dp),
+                modifier = Modifier.verticalScroll(rememberScrollState()).heightIn(max = 420.dp)
+            ) {
+                if (!started) {
+                    OutlinedTextField(
+                        value = input,
+                        onValueChange = { input = it },
+                        label = { Text("粘贴单词（每行一个或空格/逗号分隔）") },
+                        modifier = Modifier.fillMaxWidth(),
+                        minLines = 6
+                    )
+                    Text(
+                        "识别 ${preview.accepted.size} 个 · 重复 ${preview.duplicates.size} · 无效 ${preview.invalid.size}" +
+                            if (preview.truncated > 0) " · 超出上限 ${preview.truncated} 个" else "",
+                        fontSize = 13.sp,
+                        color = MaterialTheme.colorScheme.primary
+                    )
+                    Text(
+                        "中文、词性、音标会被自动忽略；不支持带空格的词组（如 give up 会被当两个词）。",
+                        fontSize = 11.sp,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                    if (preview.accepted.size > 50) {
+                        Text(
+                            "⚠️ 本次共 ${preview.accepted.size} 个词，按每词约 2 秒估算需 ${preview.accepted.size * 2} 秒左右，" +
+                                "并消耗 ${preview.accepted.size} 次 API 调用。",
+                            fontSize = 12.sp,
+                            color = MaterialTheme.colorScheme.error
+                        )
+                    }
+                    if (!hasKey) {
+                        Text(
+                            "还没有配置 API Key：先去右上角 ⚙️ 填写后再来。",
+                            fontSize = 12.sp,
+                            color = MaterialTheme.colorScheme.error
+                        )
+                    }
+                } else {
+                    Text(
+                        "进度 ${state.done}/${state.total} · 已入库 ${state.inserted}" +
+                            if (state.skippedExisting > 0) " · 跳过重复 ${state.skippedExisting}" else "",
+                        fontSize = 14.sp
+                    )
+                    if (state.running) {
+                        LinearProgressIndicator(
+                            progress = {
+                                if (state.total == 0) 0f else state.done.toFloat() / state.total
+                            },
+                            modifier = Modifier.fillMaxWidth()
+                        )
+                        Text(
+                            "正在查：${state.currentWord}",
+                            fontSize = 13.sp,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                        Text(
+                            "可以点「后台继续」关掉这个窗口，任务会接着跑（主页会显示进度）。",
+                            fontSize = 11.sp,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    } else {
+                        Text(
+                            when {
+                                state.canceled -> "已取消：已完成的 ${state.inserted} 个词已入库，未跑的没有处理。"
+                                state.noApiKey -> "没有配置 API Key，未执行任何查询。"
+                                state.total == 0 -> "没有可处理的单词：识别到的新词为 0（可能全是重复或无效输入）。"
+                                else -> "完成：成功入库 ${state.inserted} 个 · 失败 ${state.failed.size} 个"
+                            },
+                            fontSize = 14.sp
+                        )
+                        if (state.skippedInvalid.isNotEmpty()) {
+                            Text(
+                                "无效输入 ${state.skippedInvalid.size} 个：${state.skippedInvalid.take(10).joinToString(", ")}",
+                                fontSize = 11.sp,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
+                        if (state.failed.isNotEmpty()) {
+                            Text(
+                                "失败：${state.failed.joinToString(", ")}",
+                                fontSize = 12.sp,
+                                color = MaterialTheme.colorScheme.error
+                            )
+                        }
+                    }
+                }
+            }
+        },
+        confirmButton = {
+            when {
+                !started -> TextButton(
+                    onClick = { vm.startBatch(input) },
+                    enabled = preview.accepted.isNotEmpty() && hasKey
+                ) { Text("开始批量查词") }
+
+                state.running -> TextButton(onClick = { vm.cancelBatch() }) { Text("取消") }
+
+                state.failed.isNotEmpty() -> TextButton(onClick = { vm.retryFailedBatch() }) { Text("重试失败项") }
+
+                else -> {}
+            }
+        },
+        dismissButton = {
+            if (state.running) {
+                TextButton(onClick = onClose) { Text("后台继续") }
+            } else {
+                TextButton(onClick = {
+                    vm.resetBatch()
+                    onClose()
+                }) { Text(if (started) "完成" else "取消") }
+            }
+        }
+    )
+}
+
+/**
+ * AI 服务设置：厂商（预设 8 家 + 自定义）、模型、baseUrl、API Key、测试连接。
+ * 所有厂商都走 OpenAI 兼容的 /chat/completions 协议，因此只有这三个变量不同。
+ */
+@Composable
+fun SettingsDialog(vm: WordBookViewModel, onClose: () -> Unit) {
+    var providerId by remember { mutableStateOf(vm.currentProviderId()) }
+    var showPicker by remember { mutableStateOf(false) }
+    var key by remember(providerId) { mutableStateOf(vm.apiKeyFor(providerId)) }
+    var model by remember(providerId) { mutableStateOf(vm.modelFor(providerId)) }
+    var baseUrl by remember(providerId) { mutableStateOf(vm.baseUrlFor(providerId)) }
+    var testing by remember { mutableStateOf(false) }
+    var testResult by remember { mutableStateOf<Pair<Boolean, String>?>(null) }
+    val provider = AiProviders.byId(providerId)
+
+    if (showPicker) {
+        AlertDialog(
+            onDismissRequest = { showPicker = false },
+            title = { Text("选择 AI 厂商") },
+            text = {
+                Column(
+                    modifier = Modifier
+                        .verticalScroll(rememberScrollState())
+                        .heightIn(max = 400.dp)
+                ) {
+                    vm.providers().forEach { p ->
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clickable {
+                                    providerId = p.id
+                                    showPicker = false
+                                }
+                                .padding(vertical = 4.dp)
+                        ) {
+                            RadioButton(
+                                selected = p.id == providerId,
+                                onClick = {
+                                    providerId = p.id
+                                    showPicker = false
+                                }
+                            )
+                            Column {
+                                Text(p.displayName, fontSize = 14.sp)
+                                if (p.hint.isNotBlank()) {
+                                    Text(
+                                        p.hint,
+                                        fontSize = 11.sp,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                                    )
+                                }
+                            }
+                        }
+                    }
+                }
+            },
+            confirmButton = { TextButton(onClick = { showPicker = false }) { Text("关闭") } }
+        )
+    }
+
+    AlertDialog(
+        onDismissRequest = onClose,
+        title = { Text("AI 服务设置") },
+        text = {
+            Column(
+                verticalArrangement = Arrangement.spacedBy(8.dp),
+                modifier = Modifier.verticalScroll(rememberScrollState())
+            ) {
+                OutlinedButton(
+                    onClick = { showPicker = true },
+                    modifier = Modifier.fillMaxWidth()
+                ) { Text("厂商：${provider.displayName}") }
+
+                OutlinedTextField(
+                    value = model,
+                    onValueChange = { model = it },
+                    label = { Text("模型") },
+                    placeholder = { Text(AiProviders.byId(providerId).defaultModel.ifBlank { "如 gpt-4o-mini" }) },
+                    modifier = Modifier.fillMaxWidth(),
+                    singleLine = true
+                )
+                OutlinedTextField(
+                    value = baseUrl,
+                    onValueChange = { baseUrl = it },
+                    label = { Text("baseUrl（自定义时必填）") },
+                    placeholder = { Text("https://api.example.com/v1") },
+                    modifier = Modifier.fillMaxWidth(),
+                    singleLine = true
+                )
+                OutlinedTextField(
+                    value = key,
+                    onValueChange = { key = it },
+                    label = { Text("API Key") },
+                    modifier = Modifier.fillMaxWidth(),
+                    singleLine = true
+                )
+                Text(
+                    if (provider.hint.isNotBlank()) "Key 申请：${provider.hint}" else "填你自己的 OpenAI 兼容服务地址",
+                    fontSize = 11.sp,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    TextButton(
+                        onClick = {
+                            testing = true
+                            testResult = null
+                            vm.testAiConnection(providerId, key, model, baseUrl) { ok, msg ->
+                                testing = false
+                                testResult = ok to msg
+                            }
+                        },
+                        enabled = !testing
+                    ) {
+                        if (testing) CircularProgressIndicator(modifier = Modifier.size(16.dp))
+                        else Text("测试连接")
+                    }
+                    testResult?.let { (ok, msg) ->
+                        Text(
+                            msg,
+                            fontSize = 12.sp,
+                            color = if (ok) MaterialTheme.colorScheme.primary
+                            else MaterialTheme.colorScheme.error
+                        )
+                    }
+                }
+                Text(
+                    "所有 AI 功能（AI 查词、批量查词、AI 会话、详情页问答）都用这里选的厂商；" +
+                        "每个厂商的 Key 分开保存，切换后无需重填。\n\n" +
+                        "数据仍全部保存在手机本地。",
+                    fontSize = 11.sp,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+                Text(
+                    "版本 v0.1（versionCode 8）",
+                    fontSize = 11.sp,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+        },
+        confirmButton = {
+            TextButton(onClick = {
+                vm.saveAiConfig(providerId, key, model, baseUrl)
+                onClose()
+            }) { Text("保存") }
+        },
+        dismissButton = {
+            TextButton(onClick = onClose) { Text("取消") }
+        }
+    )
+}

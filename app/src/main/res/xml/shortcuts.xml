@@ -1,0 +1,27 @@
+<?xml version="1.0" encoding="utf-8"?>
+<shortcuts xmlns:android="http://schemas.android.com/apk/res/android">
+    <shortcut
+        android:shortcutId="add_word"
+        android:enabled="true"
+        android:icon="@mipmap/ic_launcher"
+        android:shortcutShortLabel="@string/shortcut_add_word"
+        android:shortcutLongLabel="@string/shortcut_add_word_long">
+        <intent
+            android:action="android.intent.action.VIEW"
+            android:targetPackage="com.example.wordbook"
+            android:targetClass="com.example.wordbook.MainActivity" />
+        <extra android:name="open_add" android:value="true" />
+    </shortcut>
+    <shortcut
+        android:shortcutId="start_review"
+        android:enabled="true"
+        android:icon="@mipmap/ic_launcher"
+        android:shortcutShortLabel="@string/shortcut_start_review">
+        <intent
+            android:action="android.intent.action.VIEW"
+            android:targetPackage="com.example.wordbook"
+            android:targetClass="com.example.wordbook.MainActivity" />
+        <extra android:name="open_add" android:value="false" />
+        <extra android:name="open_review" android:value="true" />
+    </shortcut>
+</shortcuts>

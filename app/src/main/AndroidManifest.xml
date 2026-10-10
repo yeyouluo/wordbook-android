@@ -1,0 +1,70 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+
+    <!-- 调 DeepSeek API 需要联网 -->
+    <uses-permission android:name="android.permission.INTERNET" />
+    <!-- Android 13+ 每日单词提醒通知 -->
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+
+    <!--
+      Android 11+ 软件包可见性（Package Visibility）：
+      不声明这段，APP 就"看不见"系统里任何 TTS 引擎，
+      TextToSpeech 的 onInit 会直接返回 ERROR（表现为"还没有可用的语音引擎"）。
+    -->
+    <queries>
+        <intent>
+            <action android:name="android.intent.action.TTS_SERVICE" />
+        </intent>
+    </queries>
+
+    <application
+        android:name=".WordBookApplication"
+        android:allowBackup="true"
+        android:icon="@mipmap/ic_launcher"
+        android:label="单词本"
+        android:supportsRtl="true"
+        android:theme="@style/Theme.WordBook">
+
+        <activity
+            android:name=".MainActivity"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+
+            <!-- 长按桌面图标的快捷方式：添加单词 / 开始复习 -->
+            <meta-data
+                android:name="android.app.shortcuts"
+                android:resource="@xml/shortcuts" />
+        </activity>
+
+        <!-- 接收其他 APP 的分享文本（微信/浏览器里的生词一键入本） -->
+        <activity
+            android:name=".ShareReceiverActivity"
+            android:excludeFromRecents="true"
+            android:exported="true"
+            android:label="存入单词本"
+            android:theme="@android:style/Theme.Translucent.NoTitleBar">
+            <intent-filter>
+                <action android:name="android.intent.action.SEND" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <data android:mimeType="text/plain" />
+            </intent-filter>
+        </activity>
+
+        <!-- 桌面小组件：今日待复习 / 掌握进度，点击直达复习 -->
+        <receiver
+            android:name=".WordBookWidgetProvider"
+            android:exported="false"
+            android:label="单词本">
+            <intent-filter>
+                <action android:name="android.appwidget.action.APPWIDGET_UPDATE" />
+            </intent-filter>
+            <meta-data
+                android:name="android.appwidget.provider"
+                android:resource="@xml/widget_info" />
+        </receiver>
+    </application>
+
+</manifest>

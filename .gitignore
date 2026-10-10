@@ -1,0 +1,26 @@
+# ---- 构建产物 ----
+.gradle/
+build/
+app/build/
+captures/
+.cxx/
+release/
+dist/
+
+# ---- 本机配置与密钥（绝不提交）----
+local.properties
+keystore/
+*.jks
+*.keystore
+
+# ---- IDE ----
+.idea/
+*.iml
+*.hprof
+
+# ---- 工具缓存 ----
+.maven-proxy-cache/
+.kotlin/
+
+# ---- macOS ----
+.DS_Store
