@@ -1,32 +1,37 @@
 # 依赖与 Actions 的自动更新检查
-# 每周一自动开 PR；项目自用为主，不开启自动合并
+#
+# 策略说明（个人自用项目 + 工具链刻意锁定）：
+# - Gradle 依赖**只接受补丁级更新**（如 2.6.1 → 2.6.2）。AndroidX / Compose 的小版本升级
+#   经常要求同步抬高 compileSdk 与 AGP/Kotlin，属于"要整套协调"的事，
+#   不适合由机器人开 PR 自动合并，所以 minor/major 一律忽略，需要时手动升级。
+# - GitHub Actions 用月度检查（它的版本升级基本无痛）。
 version: 2
 updates:
   - package-ecosystem: gradle
     directory: "/"
     schedule:
-      interval: weekly
-      day: monday
-    open-pull-requests-limit: 5
+      interval: monthly
+    open-pull-requests-limit: 3
     labels:
       - dependencies
     commit-message:
       prefix: "chore(deps)"
+    ignore:
+      # 只放行补丁号更新；小版本/大版本需要人工评估工具链兼容性
+      - dependency-name: "*"
+        update-types:
+          - "version-update:semver-minor"
+          - "version-update:semver-major"
     groups:
-      compose:
+      gradle-patches:
         patterns:
-          - "androidx.compose*"
-      androidx:
-        patterns:
-          - "androidx.*"
-      kotlin:
-        patterns:
-          - "org.jetbrains.kotlin*"
+          - "*"
 
   - package-ecosystem: github-actions
     directory: "/"
     schedule:
       interval: monthly
+    open-pull-requests-limit: 5
     labels:
       - dependencies
       - ci
