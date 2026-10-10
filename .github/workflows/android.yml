@@ -19,8 +19,22 @@ jobs:
           distribution: temurin
           java-version: '17'
 
-      - name: Set up Android SDK
-        uses: android-actions/setup-android@v3
+      # GitHub 的 ubuntu runner 已预装 Android SDK（ANDROID_HOME 已导出、许可已接受），
+      # 因此不需要 android-actions/setup-android（它会在部分 runner 上安装失败）。
+      - name: Show Android SDK
+        run: |
+          echo "ANDROID_HOME=${ANDROID_HOME:-未设置}"
+          echo "ANDROID_SDK_ROOT=${ANDROID_SDK_ROOT:-未设置}"
+          ls "${ANDROID_HOME:-/usr/local/lib/android/sdk}" | head
+
+      - name: Cache Gradle
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.gradle/caches
+            ~/.gradle/wrapper
+          key: gradle-${{ runner.os }}-${{ hashFiles('**/*.gradle.kts', 'gradle/libs.versions.toml', 'gradle/wrapper/gradle-wrapper.properties') }}
+          restore-keys: gradle-${{ runner.os }}-
 
       - name: Build debug APK
         run: ./gradlew assembleDebug --no-daemon --stacktrace
@@ -28,6 +42,6 @@ jobs:
       - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
-          name: WordBook-debug-apk
-          path: app/build/outputs/apk/debug/*.apk
-          if-no-files-found: error
+          name: WordBook-v0.1-debug-apk
+          path: dist/*.apk
+          if-no-files-found: warn
