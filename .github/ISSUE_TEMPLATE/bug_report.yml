@@ -1,0 +1,93 @@
+name: Bug 报告
+description: 报告一个可复现的问题（闪退、行为不符预期、数据异常等）
+title: "[Bug] "
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        感谢反馈！请尽量把信息填全——尤其是**复现步骤**和**App 版本**，这决定了能否定位。
+        安全相关问题请走 [SECURITY.md](https://github.com/yeyouluo/wordbook-android/blob/main/SECURITY.md)，不要在这里公开。
+
+  - type: checkboxes
+    id: precheck
+    attributes:
+      label: 提交前确认
+      options:
+        - label: 我已经搜索过现有 Issue，没有重复
+          required: true
+        - label: 我用的是最新版本（或已说明具体版本）
+          required: true
+
+  - type: input
+    id: app_version
+    attributes:
+      label: App 版本
+      description: 在 App 内点右上角 ⚙️，底部会显示「版本 vX.Y（versionCode N）」
+      placeholder: 例如 v0.1（versionCode 8）
+    validations:
+      required: true
+
+  - type: input
+    id: device
+    attributes:
+      label: 机型与系统
+      placeholder: 例如 小米 14 / 澎湃 OS 2.0（Android 15）
+    validations:
+      required: true
+
+  - type: dropdown
+    id: install_source
+    attributes:
+      label: 安装来源
+      options:
+        - Releases 里的 release 包
+        - Releases 里的 debug 包
+        - 自己从源码构建
+        - 其他（请在下方说明）
+    validations:
+      required: true
+
+  - type: textarea
+    id: steps
+    attributes:
+      label: 复现步骤
+      placeholder: |
+        1. 打开 App，点右上角 🎵
+        2. 粘贴 10 个单词，点「开始批量查词」
+        3. 跑到第 3 个词时闪退
+    validations:
+      required: true
+
+  - type: textarea
+    id: expected
+    attributes:
+      label: 期望行为 vs 实际行为
+    validations:
+      required: true
+
+  - type: textarea
+    id: logs
+    attributes:
+      label: 日志 / 截图（可选）
+      description: 可用 `adb logcat | grep -i wordbook` 抓日志；闪退可附 logcat 崩溃栈
+      render: shell
+    validations:
+      required: false
+
+  - type: dropdown
+    id: ai_provider
+    attributes:
+      label: 若问题与 AI 功能相关，你用的是哪家厂商？
+      options:
+        - 不涉及 AI
+        - DeepSeek
+        - Kimi（月之暗面）
+        - 通义千问
+        - 智谱 GLM
+        - 硅基流动
+        - OpenRouter
+        - OpenAI
+        - 自定义 baseUrl
+    validations:
+      required: false

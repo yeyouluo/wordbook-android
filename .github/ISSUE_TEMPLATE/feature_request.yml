@@ -1,0 +1,48 @@
+name: 功能建议
+description: 提出一个新功能或改进想法
+title: "[Feature] "
+labels: ["enhancement"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        这个项目刻意保持"少而精"：**先讲清楚它解决什么日常问题**，比讲实现方案更有说服力。
+        另外可以先看 README 的 Roadmap 与「已知限制」，避免重复。
+
+  - type: textarea
+    id: problem
+    attributes:
+      label: 你想解决什么问题？
+      description: 描述使用场景，而不是直接给方案
+      placeholder: 例如：每天通勤时想不看屏幕听单词，但现在只能一个个点喇叭
+    validations:
+      required: true
+
+  - type: textarea
+    id: proposal
+    attributes:
+      label: 你设想的做法（可选）
+    validations:
+      required: false
+
+  - type: dropdown
+    id: frequency
+    attributes:
+      label: 你会多久用一次这个功能？
+      options:
+        - 每天都会用
+        - 每周几次
+        - 偶尔用
+        - 只是觉得可以有
+    validations:
+      required: true
+
+  - type: checkboxes
+    id: willingness
+    attributes:
+      label: 你是否愿意提交 PR？
+      options:
+        - label: 愿意自己实现（可以先开 Issue 讨论设计）
+        - label: 希望作者实现
+    validations:
+      required: false

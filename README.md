@@ -11,7 +11,7 @@
 [![Release](https://img.shields.io/badge/Release-v0.1-success.svg)](../../releases)
 [![CI](https://github.com/yeyouluo/wordbook-android/actions/workflows/android.yml/badge.svg)](../../actions/workflows/android.yml)
 
-[功能](#-功能) · [快速开始](#-快速开始) · [AI 配置](#-ai-配置支持多厂商) · [工作原理](#-它是怎么工作的) · [项目结构](#-项目结构) · [Roadmap](#-roadmap) · [贡献](#-贡献)
+[功能](#-功能) · [快速开始](#-快速开始) · [AI 配置](#-ai-配置支持多厂商) · [工作原理](#-它是怎么工作的) · [项目结构](#-项目结构) · [Roadmap](#-roadmap) · [使用手册](使用手册.md) · [贡献](CONTRIBUTING.md)
 
 </div>
 
@@ -260,12 +260,19 @@ app/src/main/java/com/example/wordbook/
 
 ## 🤝 贡献
 
-欢迎 Issue / PR。开发前建议读一下上面的「架构约定」，几个硬性要求：
+欢迎 Issue 与 PR，完整约定见 **[CONTRIBUTING.md](CONTRIBUTING.md)**。三条底线：
 
-- 新功能必须有明确的「用户每天会用」的理由，拒绝为了堆功能而堆；
-- UI 不直接访问数据库与网络，统一走 ViewModel；
-- 数据库改动**必须写 Migration**，不允许 `fallbackToDestructiveMigration`；
-- 提交前保证 `./gradlew assembleDebug` 通过。
+- 新功能要能回答"用户每天会用吗"——本项目宁可少而精，不做设置项堆砌；
+- UI 不直接访问数据库与网络，统一走 ViewModel；规则类逻辑放 `util/` 复用，不复制第二份；
+- 数据库改动**必须写 Migration**，不允许 `fallbackToDestructiveMigration`；提交前 `./gradlew assembleDebug` 通过。
+
+| 入口 | 用途 |
+|---|---|
+| [Bug 报告](../../issues/new?template=bug_report.yml) | 闪退、行为不符预期、数据异常 |
+| [功能建议](../../issues/new?template=feature_request.yml) | 新功能或改进想法 |
+| [使用手册](使用手册.md) | 安装、AI 配置、复习体系、导入导出、常见问题 |
+| [SECURITY.md](SECURITY.md) | 安全问题请走私密渠道，不要开公开 Issue |
+| [CHANGELOG.md](CHANGELOG.md) | 版本变更记录 |
 
 ## 📄 License
 
