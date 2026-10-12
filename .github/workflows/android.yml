@@ -52,6 +52,8 @@ jobs:
       # 用仓库自带的 GITHUB_TOKEN（本地不需要任何凭据）：
       # 1) 该版本还没有 Release 就先创建一个（notes 指向 CHANGELOG）
       # 2) 把 debug 包挂上去（只传 *-debug.apk，绝不覆盖本地签名的正式包）
+      # 注意：本段所有行必须 ≥10 空格缩进。此前 notes 的多行文案里有一行只缩进 2 空格，
+      # 直接截断了 `run: |` 块标量 → YAML 解析失败 → 工作流在加载阶段就红，Publish 静默没发生。
       - name: Ensure release and attach debug APK
         if: github.event_name == 'push' && github.ref == 'refs/heads/main'
         env:
@@ -60,13 +62,14 @@ jobs:
           VERSION=$(grep -oP 'versionName\s*=\s*"\K[^"]+' app/build.gradle.kts)
           TAG="v${VERSION}"
           echo "app version: $VERSION → tag: $TAG"
-          if ! gh release view "$TAG" >/dev/null 2>&1; then
-            gh release create "$TAG" \
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            echo "Release $TAG 已存在，跳过创建"
+          elif gh release create "$TAG" \
               --title "WordBook ${TAG}" \
-              --notes "变更见 [CHANGELOG.md](https://github.com/${GITHUB_REPOSITORY}/blob/main/CHANGELOG.md)。
-
-  正式包（已签名、体积更小）由本地签名后上传；本 Release 的 debug 包可直接安装使用。" || true
+              --notes "变更见 https://github.com/${{ github.repository }}/blob/main/CHANGELOG.md —— 正式包（已签名、体积更小）由本地签名后手动补挂，本 Release 的 debug 包可直接安装使用。"; then
             echo "已创建 Release $TAG"
+          else
+            echo "::warning::创建 Release $TAG 失败：请检查仓库 Settings → Actions → Workflow permissions 是否允许读写"
           fi
-          gh release upload "$TAG" dist/*-debug.apk --clobber || true
+          gh release upload "$TAG" dist/*-debug.apk --clobber || echo "::warning::debug 包挂载失败"
           echo "已挂载 debug 包到 $TAG"
