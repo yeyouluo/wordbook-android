@@ -4,6 +4,7 @@ import androidx.room.Dao
 import androidx.room.Delete
 import androidx.room.Insert
 import androidx.room.Query
+import androidx.room.Transaction
 import androidx.room.Update
 import kotlinx.coroutines.flow.Flow
 
@@ -42,4 +43,17 @@ interface WordDao {
 
     @Query("SELECT COUNT(*) FROM words WHERE mastered = 1")
     suspend fun masteredCount(): Int
+
+    @Query("DELETE FROM words")
+    suspend fun deleteAll()
+
+    /**
+     * 云同步 pull 用：整表替换（事务内先清空再写入），
+     * 调用方负责在此之前做好本机备份（见 WordBookViewModel.pullFromRemote）。
+     */
+    @Transaction
+    suspend fun replaceAll(words: List<Word>) {
+        deleteAll()
+        insertAll(words)
+    }
 }

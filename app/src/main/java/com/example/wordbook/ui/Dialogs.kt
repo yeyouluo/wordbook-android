@@ -47,6 +47,8 @@ import androidx.compose.ui.unit.sp
 import com.example.wordbook.WordBookViewModel
 import com.example.wordbook.data.AiProviders
 import com.example.wordbook.data.Word
+import com.example.wordbook.util.SyncScheduler
+import com.example.wordbook.data.WebDavSync
 import com.example.wordbook.util.WordTextUtils
 
 /** 今日复习：艾宾浩斯到期列表；每词：🔊发音 + ✓记住了 + ✕没记住 */
@@ -745,7 +747,7 @@ fun SettingsDialog(vm: WordBookViewModel, onClose: () -> Unit) {
                     )
                     Text(
                         "  云同步（WebDAV）" +
-                            if (vm.webdavConfigured()) "：已配置" else "：未配置"
+                            if (vm.syncConfigured()) "：已配置" else "：未配置"
                     )
                 }
                 Text(
@@ -772,91 +774,140 @@ fun SettingsDialog(vm: WordBookViewModel, onClose: () -> Unit) {
         SyncDialog(vm = vm, onClose = { showSync = false })
     }
 }
-
 /**
- * WebDAV 云同步（问题 #7）：坚果云 / Nextcloud / 群晖等标准 WebDAV 都可用。
- * 合并策略：按单词配对，谁的 updatedAt 新用谁；库中没有的直接新增。
+ * WebDAV 云同步（P0）设置区：服务器 / 路径 / 账号 / 密码 / 自动同步开关 / 定时间隔 /
+ * 测试连接 / 立即同步 / 重置同步状态 / 上次同步时间与远端 rev。
+ * 默认预填 Seafile（现网 http://47.121.121.215:9998，路径 /seafdav/yeyouluoVault/单词本）。
  */
 @Composable
 fun SyncDialog(vm: WordBookViewModel, onClose: () -> Unit) {
-    var url by remember { mutableStateOf(vm.webdavUrl()) }
-    var user by remember { mutableStateOf(vm.webdavUser()) }
-    var pass by remember { mutableStateOf(vm.webdavPassword()) }
-    var auto by remember { mutableStateOf(vm.webdavAutoSync()) }
+    var server by remember { mutableStateOf(vm.syncServer()) }
+    var basePath by remember { mutableStateOf(vm.syncBasePath()) }
+    var user by remember { mutableStateOf(vm.syncUser()) }
+    var pass by remember { mutableStateOf(vm.syncPassword()) }
+    var auto by remember { mutableStateOf(vm.syncAuto()) }
+    var interval by remember { mutableIntStateOf(vm.syncIntervalMinutes()) }
+    var showIntervalPicker by remember { mutableStateOf(false) }
     val state by vm.sync.collectAsState()
+    var lastAt by remember { mutableStateOf(vm.syncLastAt()) }
+    var lastRev by remember { mutableStateOf(vm.syncLastRev()) }
+    var lastError by remember { mutableStateOf(vm.syncLastError()) }
+
+    // 同步结束后刷新展示区
+    LaunchedEffect(state.running, state.message) {
+        if (!state.running) {
+            lastAt = vm.syncLastAt()
+            lastRev = vm.syncLastRev()
+            lastError = vm.syncLastError()
+        }
+    }
+
+    if (showIntervalPicker) {
+        AlertDialog(
+            onDismissRequest = { showIntervalPicker = false },
+            title = { Text("定时同步间隔") },
+            text = {
+                Column {
+                    SyncScheduler.INTERVAL_OPTIONS.forEach { m ->
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clickable { interval = m; showIntervalPicker = false }
+                                .padding(vertical = 4.dp)
+                        ) {
+                            RadioButton(selected = interval == m, onClick = { interval = m; showIntervalPicker = false })
+                            Text(if (m == 0) "关闭定时同步" else "每 $m 分钟")
+                        }
+                    }
+                }
+            },
+            confirmButton = { TextButton(onClick = { showIntervalPicker = false }) { Text("关闭") } }
+        )
+    }
 
     AlertDialog(
         onDismissRequest = onClose,
-        title = { Text("云同步（WebDAV）") },
+        title = { Text("WebDAV 同步（Seafile）") },
         text = {
             Column(
                 verticalArrangement = Arrangement.spacedBy(8.dp),
                 modifier = Modifier.verticalScroll(rememberScrollState())
             ) {
                 Text(
-                    "填一个指向「文件」的完整地址（文件夹要先在网盘里建好）：\n" +
-                        "坚果云示例：https://dav.jianguoyun.com/dav/wordbook/wordbook.json\n\n" +
-                        "⚠️ 坚果云必须用「应用密码」，不是登录密码；凭据只存在本机。",
+                    "同步内容只有词库（含全部学习进度），不含 AI Key、不含界面偏好。" +
+                        "凭据只存本机，不会出现在日志与导出的 CSV 里。",
                     fontSize = 11.sp,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
                 OutlinedTextField(
-                    value = url,
-                    onValueChange = { url = it },
-                    label = { Text("WebDAV 文件地址") },
+                    value = server,
+                    onValueChange = { server = it },
+                    label = { Text("服务器") },
+                    placeholder = { Text(WebDavSync.DEFAULT_SERVER) },
+                    modifier = Modifier.fillMaxWidth(),
+                    singleLine = true
+                )
+                OutlinedTextField(
+                    value = basePath,
+                    onValueChange = { basePath = it },
+                    label = { Text("同步路径") },
+                    placeholder = { Text(WebDavSync.DEFAULT_BASE_PATH) },
                     modifier = Modifier.fillMaxWidth(),
                     singleLine = true
                 )
                 OutlinedTextField(
                     value = user,
                     onValueChange = { user = it },
-                    label = { Text("用户名（坚果云是邮箱）") },
+                    label = { Text("账号") },
                     modifier = Modifier.fillMaxWidth(),
                     singleLine = true
                 )
                 OutlinedTextField(
                     value = pass,
                     onValueChange = { pass = it },
-                    label = { Text("密码 / 应用密码") },
+                    label = { Text("密码") },
                     modifier = Modifier.fillMaxWidth(),
                     singleLine = true
                 )
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Checkbox(checked = auto, onCheckedChange = { auto = it })
-                    Text("离开 App 时自动上传一份", fontSize = 12.sp)
+                    Text("自动同步（启动后 / 回到前台 / 定时）", fontSize = 12.sp)
                 }
+                OutlinedButton(
+                    onClick = { showIntervalPicker = true },
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Text(
+                        "定时间隔：" +
+                            if (interval == 0) "关闭" else "每 $interval 分钟"
+                    )
+                }
+
                 Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
                     TextButton(
                         onClick = {
-                            vm.saveWebdavConfig(url, user, pass, auto)
-                            vm.testWebdav()
+                            vm.saveSyncConfig(server, basePath, user, pass, auto, interval)
+                            vm.testSync()
                         },
                         enabled = !state.running
                     ) { Text("测试连接") }
                     TextButton(
                         onClick = {
-                            vm.saveWebdavConfig(url, user, pass, auto)
-                            vm.syncNow()
+                            vm.saveSyncConfig(server, basePath, user, pass, auto, interval)
+                            vm.syncNow(manual = true)
                         },
                         enabled = !state.running
-                    ) { Text("智能同步") }
+                    ) { Text("立即同步") }
                 }
-                Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
-                    TextButton(
-                        onClick = {
-                            vm.saveWebdavConfig(url, user, pass, auto)
-                            vm.webdavUpload()
-                        },
-                        enabled = !state.running
-                    ) { Text("仅上传") }
-                    TextButton(
-                        onClick = {
-                            vm.saveWebdavConfig(url, user, pass, auto)
-                            vm.webdavDownload()
-                        },
-                        enabled = !state.running
-                    ) { Text("仅拉取合并") }
-                }
+                TextButton(
+                    onClick = {
+                        vm.saveSyncConfig(server, basePath, user, pass, auto, interval)
+                        vm.resetSyncState()
+                    },
+                    enabled = !state.running
+                ) { Text("重置同步状态") }
+
                 if (state.running) {
                     Row(verticalAlignment = Alignment.CenterVertically) {
                         CircularProgressIndicator(modifier = Modifier.size(16.dp))
@@ -870,9 +921,28 @@ fun SyncDialog(vm: WordBookViewModel, onClose: () -> Unit) {
                         else MaterialTheme.colorScheme.error
                     )
                 }
+
+                val fmt = remember { java.text.SimpleDateFormat("MM-dd HH:mm", java.util.Locale.US) }
                 Text(
-                    "「智能同步」= 先拉远端合并（谁新用谁）再上传合并结果；" +
-                        "两端都改过同一个词时，以最后修改时间为准。",
+                    "上次同步：" + if (lastAt > 0) fmt.format(java.util.Date(lastAt)) else "从未",
+                    fontSize = 11.sp,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+                Text(
+                    "远端 rev：" + lastRev.ifBlank { "（尚未同步过）" },
+                    fontSize = 11.sp,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+                if (lastError.isNotBlank()) {
+                    Text(
+                        "上次失败原因：$lastError",
+                        fontSize = 11.sp,
+                        color = MaterialTheme.colorScheme.error
+                    )
+                }
+                Text(
+                    "冲突策略：最后写入优先（按远端 exportedAt 与本机上次同步时间比较），" +
+                        "败落的一侧会自动导出 CSV 备份到应用目录（保留最近 7 份）。",
                     fontSize = 11.sp,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
@@ -880,7 +950,7 @@ fun SyncDialog(vm: WordBookViewModel, onClose: () -> Unit) {
         },
         confirmButton = {
             TextButton(onClick = {
-                vm.saveWebdavConfig(url, user, pass, auto)
+                vm.saveSyncConfig(server, basePath, user, pass, auto, interval)
                 onClose()
             }) { Text("保存") }
         },

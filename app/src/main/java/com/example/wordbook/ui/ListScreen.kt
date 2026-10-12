@@ -163,6 +163,15 @@ fun WordBookApp(
         checkClipboard()
     }
 
+    // 云同步提示（冲突等）弹一次 toast 后清空
+    val syncToast by vm.syncToast.collectAsState()
+    LaunchedEffect(syncToast) {
+        syncToast?.let {
+            Toast.makeText(context, it, Toast.LENGTH_LONG).show()
+            vm.syncToast.value = null
+        }
+    }
+
     val lifecycleOwner = androidx.lifecycle.compose.LocalLifecycleOwner.current
     DisposableEffect(lifecycleOwner) {
         val observer = androidx.lifecycle.LifecycleEventObserver { _, event ->

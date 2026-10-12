@@ -189,14 +189,16 @@ class MainActivity : ComponentActivity() {
         super.onResume()
         // 回到前台时刷新小组件，保证看到的待复习数是最新的
         WordBookWidgetProvider.refresh(this)
+        // 触发时机之二：回到前台静默同步（内部有 30 秒去抖，失败静默）
+        vm.syncOnResume()
     }
 
     override fun onStop() {
         super.onStop()
         // 离开 APP 时刷新桌面小组件（复习/加词后的计数立刻跟上）
         WordBookWidgetProvider.refresh(this)
-        // 开了「离开时自动同步」就静默上传一次
-        vm.webdavAutoSyncIfEnabled()
+        // 离开时也静默同步一次（与启动/前台/定时共用同一引擎）
+        vm.syncNow(manual = false)
     }
 
     override fun onDestroy() {

@@ -9,11 +9,13 @@ import com.example.wordbook.data.AiProvider
 import com.example.wordbook.data.AiProviders
 import com.example.wordbook.data.AppDatabase
 import com.example.wordbook.data.Word
+import com.example.wordbook.data.SyncRunner
 import com.example.wordbook.data.WordDao
-import com.example.wordbook.data.WebDavClient
 import com.example.wordbook.util.CsvUtil
 import com.example.wordbook.util.ReviewSchedule
 import com.example.wordbook.util.ReviewStats
+import com.example.wordbook.util.SyncGate
+import com.example.wordbook.util.SyncScheduler
 import com.example.wordbook.util.WordTextUtils
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
@@ -567,160 +569,103 @@ class WordBookViewModel(app: Application) : AndroidViewModel(app) {
         chat.value = emptyList()
     }
 
-    // ---------- WebDAV 云同步 ----------
+    // ---------- WebDAV 云同步（P0） ----------
+    // 配置、锚点、端到端逻辑都在 data/WebDavSync.kt 的 SyncRunner（Worker 与 VM 共用，不复制第二份）
     val sync = MutableStateFlow(SyncState())
 
-    fun webdavUrl(): String = prefs.getString(K_DAV_URL, "") ?: ""
-    fun webdavUser(): String = prefs.getString(K_DAV_USER, "") ?: ""
-    fun webdavPassword(): String = prefs.getString(K_DAV_PASS, "") ?: ""
-    fun webdavAutoSync(): Boolean = prefs.getBoolean(K_DAV_AUTO, false)
-    fun webdavConfigured(): Boolean =
-        webdavUrl().isNotBlank() && webdavUser().isNotBlank() && webdavPassword().isNotBlank()
+    /** 需要给用户看的同步提示（冲突解决等），UI 弹完 toast 后清空 */
+    val syncToast = MutableStateFlow<String?>(null)
 
-    fun saveWebdavConfig(url: String, user: String, password: String, autoSync: Boolean) {
-        prefs.edit()
-            .putString(K_DAV_URL, url.trim())
-            .putString(K_DAV_USER, user.trim())
-            .putString(K_DAV_PASS, password.trim())
-            .putBoolean(K_DAV_AUTO, autoSync)
-            .apply()
+    private var syncJob: Job? = null
+    private var lastResumeSyncAt = 0L
+
+    private val syncRunner: SyncRunner get() = SyncRunner(getApplication())
+
+    fun syncConfigured(): Boolean = syncRunner.configured()
+    fun syncServer(): String = syncRunner.server()
+    fun syncBasePath(): String = syncRunner.basePath()
+    fun syncUser(): String = syncRunner.user()
+    fun syncPassword(): String = syncRunner.password()
+    fun syncAuto(): Boolean = syncRunner.auto()
+    fun syncIntervalMinutes(): Int = syncRunner.intervalMinutes()
+    fun syncLastAt(): Long = syncRunner.lastSyncAt()
+    fun syncLastRev(): String = syncRunner.lastRemoteRev()
+    fun syncLastError(): String = syncRunner.lastError()
+
+    /** 保存同步配置并按新的开关/间隔重排定时任务 */
+    fun saveSyncConfig(
+        server: String,
+        basePath: String,
+        user: String,
+        password: String,
+        auto: Boolean,
+        intervalMinutes: Int
+    ) {
+        syncRunner.saveConfig(server, basePath, user, password, auto, intervalMinutes)
+        SyncScheduler.apply(getApplication())
     }
 
-    private fun newDavClient(): WebDavClient =
-        WebDavClient(webdavUrl(), webdavUser(), webdavPassword())
+    /** 重置同步状态：只清锚点，不动词库与凭据 */
+    fun resetSyncState() {
+        syncRunner.resetAnchors()
+        sync.value = SyncState(finished = true, ok = true, message = "已重置同步状态，下次同步会重新比对两端")
+    }
 
-    fun testWebdav() {
+    /** 测试连接：PROPFIND 207 才算通 */
+    fun testSync() {
         if (sync.value.running) return
         sync.value = SyncState(running = true, message = "正在连接…")
         viewModelScope.launch {
-            val (ok, msg) = newDavClient().testConnection()
+            val (ok, msg) = syncRunner.test()
             sync.value = SyncState(running = false, finished = true, ok = ok, message = msg)
         }
     }
 
-    /** 智能同步：先拉远端合并（谁新用谁），再把合并结果推回去 */
-    fun syncNow() {
-        if (sync.value.running || !webdavConfigured()) return
-        sync.value = SyncState(running = true, message = "正在同步…")
-        viewModelScope.launch {
-            val client = newDavClient()
-            val (remote, err) = client.download()
-            if (err != null) {
-                sync.value = SyncState(running = false, finished = true, ok = false, message = "下载失败：$err")
-                return@launch
+    /**
+     * 手动/定时同步。同一时刻只允许一个同步任务（防重入）。
+     * @param manual 手动触发时，失败原因直接显示在设置页；静默触发时只写入 sync_last_error。
+     */
+    fun syncNow(manual: Boolean = true) {
+        if (syncJob?.isActive == true) return
+        if (!syncConfigured()) {
+            if (manual) {
+                sync.value = SyncState(
+                    finished = true,
+                    ok = false,
+                    message = "请先填写服务器、路径、账号与密码"
+                )
             }
-            val (added, updated) = if (remote == null) 0 to 0 else mergeRemote(remote)
-            val snapshot = buildSnapshot()
-            val (ok, msg) = client.upload(snapshot)
+            return
+        }
+        if (!SyncGate.tryEnter()) return
+        syncJob = viewModelScope.launch {
+            sync.value = SyncState(running = true, message = "正在同步…")
+            val result = try {
+                syncRunner.run()
+            } catch (e: Exception) {
+                com.example.wordbook.data.SyncResult(false, "同步异常：${e.message ?: "未知错误"}")
+            } finally {
+                SyncGate.leave()
+            }
             sync.value = SyncState(
                 running = false,
                 finished = true,
-                ok = ok,
-                message = if (ok) {
-                    "同步完成：远端拉取新增 $added 个、更新 $updated 个；" +
-                        "已上传 ${snapshot.words.size} 个单词"
-                } else {
-                    "合并成功（新增 $added / 更新 $updated），但上传失败：$msg"
-                }
+                ok = result.ok,
+                message = result.message
             )
-        }
-    }
-
-    /** 只上传（本机为准） */
-    fun webdavUpload() {
-        if (sync.value.running || !webdavConfigured()) return
-        sync.value = SyncState(running = true, message = "正在上传…")
-        viewModelScope.launch {
-            val snapshot = buildSnapshot()
-            val (ok, msg) = newDavClient().upload(snapshot)
-            sync.value = SyncState(running = false, finished = true, ok = ok, message = msg)
-        }
-    }
-
-    /** 只拉取并合并（不上传） */
-    fun webdavDownload() {
-        if (sync.value.running || !webdavConfigured()) return
-        sync.value = SyncState(running = true, message = "正在拉取…")
-        viewModelScope.launch {
-            val (remote, err) = newDavClient().download()
-            if (err != null) {
-                sync.value = SyncState(running = false, finished = true, ok = false, message = "下载失败：$err")
-                return@launch
-            }
-            if (remote == null) {
-                sync.value = SyncState(
-                    running = false, finished = true, ok = true,
-                    message = "远端还没有快照文件（第一次同步请用「智能同步」上传）"
-                )
-                return@launch
-            }
-            val (added, updated) = mergeRemote(remote)
-            sync.value = SyncState(
-                running = false, finished = true, ok = true,
-                message = "拉取完成：新增 $added 个、更新 $updated 个"
-            )
-        }
-    }
-
-    /** 离开 App 时静默上传（设置里可关） */
-    fun webdavAutoSyncIfEnabled() {
-        if (!webdavAutoSync() || !webdavConfigured() || sync.value.running) return
-        viewModelScope.launch {
-            val snapshot = buildSnapshot()
-            newDavClient().upload(snapshot)
-        }
-    }
-
-    private suspend fun buildSnapshot(): WebDavClient.Snapshot {
-        val days = prefs.getStringSet(K_REVIEW_DAYS, emptySet())?.toList() ?: emptyList()
-        return WebDavClient.Snapshot(
-            words = dao.getAllOnce(),
-            reviewDays = days,
-            device = android.os.Build.MODEL ?: "android"
-        )
-    }
-
-    /** 合并远端：按单词（忽略大小写）配对，谁 updatedAt 新用谁；库中没有的直接插入 */
-    private suspend fun mergeRemote(remote: WebDavClient.Snapshot): Pair<Int, Int> {
-        val localByKey = dao.getAllOnce().associateBy { it.spelling.lowercase() }
-        var added = 0
-        var updated = 0
-        remote.words.forEach { r ->
-            if (r.spelling.isBlank()) return@forEach
-            val key = r.spelling.lowercase()
-            val local = localByKey[key]
-            when {
-                local == null -> {
-                    dao.insert(r.copy(id = 0))
-                    added++
-                }
-                r.updatedAt > local.updatedAt -> {
-                    dao.update(
-                        local.copy(
-                            phonetic = r.phonetic,
-                            meaning = r.meaning,
-                            example = r.example,
-                            mnemonic = r.mnemonic,
-                            family = r.family,
-                            mastered = r.mastered,
-                            reviewCount = r.reviewCount,
-                            reviewCorrectCount = r.reviewCorrectCount,
-                            lastReviewedAt = r.lastReviewedAt,
-                            totalCorrect = r.totalCorrect,
-                            totalWrong = r.totalWrong,
-                            createdAt = minOf(local.createdAt, r.createdAt),
-                            updatedAt = r.updatedAt
-                        )
-                    )
-                    updated++
-                }
+            // 冲突必须让用户知道（即使静默触发）；普通静默失败只留在设置页
+            if (manual || result.message.contains("冲突")) {
+                syncToast.value = result.message
             }
         }
-        if (remote.reviewDays.isNotEmpty()) {
-            val days = prefs.getStringSet(K_REVIEW_DAYS, emptySet()) ?: emptySet()
-            prefs.edit().putStringSet(K_REVIEW_DAYS, days + remote.reviewDays).apply()
-        }
-        return added to updated
+    }
+
+    /** 触发时机之二：回到前台静默同步（30 秒内不重复触发） */
+    fun syncOnResume() {
+        val now = System.currentTimeMillis()
+        if (now - lastResumeSyncAt < 30_000L) return
+        lastResumeSyncAt = now
+        syncNow(manual = false)
     }
 
     // ---------- CSV 导入 ----------
@@ -830,11 +775,5 @@ class WordBookViewModel(app: Application) : AndroidViewModel(app) {
         /** 会话上下文裁剪：最多带几条历史、总字数上限（防上下文过长导致整轮失败） */
         private const val CHAT_HISTORY_MAX_MESSAGES = 8
         private const val CHAT_HISTORY_MAX_CHARS = 4000
-
-        /** WebDAV 云同步配置 */
-        private const val K_DAV_URL = "webdav_url"
-        private const val K_DAV_USER = "webdav_user"
-        private const val K_DAV_PASS = "webdav_pass"
-        private const val K_DAV_AUTO = "webdav_auto"
     }
 }
