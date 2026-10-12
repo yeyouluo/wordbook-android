@@ -47,6 +47,7 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.example.wordbook.Stats
+import com.example.wordbook.BuildConfig
 import com.example.wordbook.WordBookViewModel
 import com.example.wordbook.data.AiProviders
 import com.example.wordbook.data.Word
@@ -975,7 +976,7 @@ fun SettingsDialog(vm: WordBookViewModel, onClose: () -> Unit) {
                     )
                 }
                 Text(
-                    "版本 v0.2（versionCode 9）\n" +
+                    "版本 v${BuildConfig.VERSION_NAME}（versionCode ${BuildConfig.VERSION_CODE}）\n" +
                         "桌面小组件：长按桌面空白处 → 小组件/小部件 → 找到「单词本」拖到桌面，" +
                         "显示今日待复习数与掌握进度，点一下直接开始复习。",
                     fontSize = 11.sp,

@@ -2,6 +2,12 @@
 
 本项目遵循 [语义化版本](https://semver.org/lang/zh-CN/)。版本号形如 `MAJOR.MINOR.PATCH`。
 
+## [0.3.1] - 2026-10-12
+
+- 修复：设置页底部版本号写死为 `v0.2（versionCode 9）`，0.3 的安装包上显示与实际版本不符。
+  改为读取 `BuildConfig.VERSION_NAME` / `VERSION_CODE`（`buildFeatures.buildConfig = true`），
+  版本号只在 `defaultConfig` 里维护一处，界面文案不会再漂移。
+
 ## [0.3] - 2026-10-12
 
 按需求分四批实施，每批独立提交、独立可验收（`git log` 可见 P0→P3）。
