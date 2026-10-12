@@ -2,6 +2,51 @@
 
 本项目遵循 [语义化版本](https://semver.org/lang/zh-CN/)。版本号形如 `MAJOR.MINOR.PATCH`。
 
+## [0.3] - 2026-10-12
+
+按需求分四批实施，每批独立提交、独立可验收（`git log` 可见 P0→P3）。
+
+**P0 · WebDAV 云同步（Seafile）** — `feat(sync)`
+
+- 新增 `data/WebDavSync.kt`（HTTP 客户端 + `SyncRunner` 端到端执行器）与 `util/SyncCore.kt`（纯决策逻辑）
+- 默认预填 Seafile：`http://47.121.121.215:9998` + 路径 `/seafdav/yeyouluoVault/单词本`
+- 远端单文件 `wordbook-sync.json = {meta:{rev,exportedAt,device}, words:[...]}`，只含词库与学习进度
+- 锚点决策：本地 `sync_last_fp`（count:ΣreviewCount:Σattempts:mastered:maxLastReviewed:maxCreated）
+  + 远端 `sync_last_remote_rev`；远端无文件→首次上传；仅本地变→上传；仅远端变→拉取；
+  双方都变→按 `remote.exportedAt` 与上次同步时间取新（LWW）
+- 冲突**败者自动备份**为 `wordbook-sync-<side>-<ts>.csv`（与每日备份共用 7 份清理管线）；
+  拉取覆盖前也先备份本机；冲突结果 toast 明示
+- 三态触发（均静默失败）：启动后 2.5s、回到前台（30s 去抖）、WorkManager 定时
+  （间隔 0/15/30/60/120 分钟可选）；进程内 `SyncGate` 防重入
+- HTTP 语义：PROPFIND 207 成功 / MKCOL 201 或 405 / PUT 200·201·204 / GET 404→无文件
+- 凭据走独立键（`sync_server` / `sync_base_path` / `sync_user` / `sync_pass` / `sync_auto` /
+  `sync_interval_minutes`），不写日志、不进 CSV、不进同步快照
+- 同步锚点放 SharedPreferences，**不动 Room 表结构**
+
+**P1 · 复习体验** — `feat(review)`
+
+- 「先回忆后判定」：默认只显示 单词+音标+🔊，点「显示释义」后才显示释义/记忆法/同根词；
+  未显示时 ✓/✗ 置灰。设置页开关（默认开）
+- 复习分页：每页 10 个 + 上一页/下一页 + 「第 x / y 页（本页 n 个）」，答过的词立即移出、下页顶替
+- 战绩明细弹窗：正确率（对 a·错 b）、复习总次数、连续天数（含今天是否已复习分支文案）、
+  本周天数、最近一次复习时间、口径说明
+
+**P2 · 列表能力** — `feat(list)`
+
+- 排序四模（时间新→旧 / 旧→新 / 字母 A→Z / Z→A），下拉单选并记住选择
+- 分页：每页 5/10/20/50/100（默认 20，记住选择）；页脚「共 N 个词 · 第 x–y · 共 p 页」+
+  上一页/下一页 + 「跳至第 x 页」（Enter/失焦触发，越界 clamp）
+- 行内编辑：条目内 ✎ 直接改六个字段并保存（`dao.update`），取消/返回键回原状态
+- 撤销：标记掌握/删除后 6 秒 Snackbar 撤销窗；**绝对写回**（掌握状态不做二次 toggle，
+  删除走 `dao.restore` 的 REPLACE 插入恢复原 id 与全部进度字段）
+
+**P3 · 杂项** — `feat`
+
+- TTS：`util/TtsController` 统一引擎与配置；音色下拉（自动挑选策略
+  Natural > Google > Premium/Enhanced > Network > 本地）、语速滑杆 0.5–2.0、试听
+- AI 会话单条收词上限可调（20/40/60/80），上限写进 system prompt，超限提示联动
+- 主题手动覆盖 system/light/dark（即时生效，重启保持）
+
 ## [0.2] - 2026-10-12
 
 本轮针对自用反馈清单（Microsoft To Do「单词本 Android 问题汇总」）逐条修复。
