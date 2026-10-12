@@ -2,6 +2,39 @@
 
 本项目遵循 [语义化版本](https://semver.org/lang/zh-CN/)。版本号形如 `MAJOR.MINOR.PATCH`。
 
+## [0.3.2] - 2026-10-12
+
+**修复：弹窗里滑不动（真机反馈）**
+
+- 根因是**修饰符顺序写反**：`Modifier.verticalScroll(state).heightIn(max = 380.dp)`。
+  看 foundation `ScrollingLayoutNode.measure` 的实现：内容按 `maxHeight = Infinity` 测量，
+  容器高取 `min(内容高, 传入 max)`，可滚动范围 = 内容高 − 容器高。
+  顺序写反时被钳住的是**内容**，于是内容高 = 容器高 → **滚动范围为 0**，
+  表现就是「怎么滑都不动、超出部分直接看不见」。
+- 修正 5 处：复习弹窗词列表、AI 厂商选择、TTS 音色选择、批量查词、单词详情
+  （详情页那处是 `heightIn(min=…)`，本身不致命，一并统一顺序）；
+  新增/设置/同步三个弹窗本来依赖 AlertDialog 隐式传下来的高度约束，这次也显式写了上限。
+- 复习弹窗词列表与 AI 厂商选择**改用 LazyColumn**：它自己就是滚动容器，
+  不会再踩「容器与内容等高」这一类坑。
+
+**改动：分页 → 无限下滑**
+
+- 单词列表去掉「每页 5/10/20/50/100 + 上一页/下一页 + 跳至第 x 页」，
+  改为无限下滑：先渲染 30 个，底部哨兵进入可视区自动再加载 30 个，
+  页脚显示「已显示 M / 共 N 个词」→ 到底显示「共 N 个词 · 已经到底了」（页脚也可点，手动兜底）。
+  筛选/排序/搜索变化会回到顶部并重置已渲染数量。
+- 复习弹窗去掉「每页 10 个 + 上一页/下一页」，待复习词一次列出、下滑即可；
+  答过的词即时移出，列表越答越短。
+- `WordBookViewModel` 随之删除 `page` / `pageSize` / `setPage` / `setPageSize` / `PAGE_SIZE_OPTIONS`
+  （`list_page_size` 这个旧偏好留在机器上不再读取，无副作用）。
+
+**工程**
+
+- 新增 Robolectric + Compose UI 测试（跑在 JVM，不需要真机/模拟器）：
+  直接驱动真实的 `ReviewDialog` / `SettingsDialog` / 单词列表，用 `performScrollToNode`
+  给「弹窗能不能滑」上锁——顺序一旦写反就会红。受限网络下测试会把 Robolectric 的
+  运行时下载指向本仓库的本地代理（`mavenProxy`）。
+
 ## [0.3.1] - 2026-10-12
 
 - 修复：设置页底部版本号写死为 `v0.2（versionCode 9）`，0.3 的安装包上显示与实际版本不符。

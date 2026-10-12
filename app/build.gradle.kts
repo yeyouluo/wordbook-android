@@ -14,8 +14,8 @@ android {
         applicationId = "com.example.wordbook"
         minSdk = 26
         targetSdk = 34
-        versionCode = 11
-        versionName = "0.3.1"
+        versionCode = 12
+        versionName = "0.3.2"
     }
 
     // 签名密钥不进仓库（见 .gitignore）：本机若放了 app/keystore/wordbook.keystore，
@@ -58,11 +58,34 @@ android {
         // 版本号只在 defaultConfig 里写一次，界面文案不会再和实际版本对不上。
         buildConfig = true
     }
+
+    testOptions {
+        unitTests {
+            // Robolectric 需要真实的资源（strings/layout）才能渲染 Compose
+            isIncludeAndroidResources = true
+            // Robolectric 首次运行会去 maven 下 android-all 运行时 jar。
+            // 受限网络（公司网按 TLS 指纹拦 Java 流量）下把它指向本仓库的本地代理；
+            // 没有配 mavenProxy 时完全不加这个参数，普通网络行为不变。
+            val proxy: String? = System.getenv("WORD_BOOK_MAVEN_PROXY")?.trim()?.takeIf { it.isNotEmpty() }
+                ?: rootProject.file("local.properties")
+                    .takeIf { it.exists() }
+                    // 不用 java.util.Properties：在 android {} 块里 `java` 是 JavaPluginExtension，
+                    // 拿不到 java.util.*（local.properties 就是简单的 key=value，直接按行取即可）
+                    ?.readLines()
+                    ?.firstOrNull { it.trimStart().startsWith("mavenProxy=") }
+                    ?.substringAfter("mavenProxy=")
+                    ?.trim()
+                    ?.takeIf { it.isNotEmpty() }
+            if (proxy != null) {
+                all { it.systemProperty("robolectric.dependency.repo.url", "$proxy/repo.maven.apache.org/maven2") }
+            }
+        }
+    }
 }
 
 // 产物文件名带上项目名与版本：dist/WordBook-v0.1-debug.apk / dist/WordBook-v0.1-release.apk
 // （AGP 8.5 未暴露 VariantOutput.outputFileName 公共 API，用构建后复制到 dist/ 的方案）
-val appVersionName: String = "0.3.1"
+val appVersionName: String = "0.3.2"
 val distDir = rootProject.layout.projectDirectory.dir("dist")
 
 tasks.register<Copy>("distDebug") {
@@ -109,4 +132,13 @@ dependencies {
     implementation(libs.androidx.work.runtime.ktx)
 
     debugImplementation(libs.androidx.ui.tooling)
+
+    // 单元测试：Robolectric 上跑 Compose UI 测试（无需真机/模拟器）
+    testImplementation(libs.junit)
+    testImplementation(libs.robolectric)
+    testImplementation(libs.androidx.test.core)
+    testImplementation(libs.androidx.test.ext.junit)
+    testImplementation(platform(libs.androidx.compose.bom))
+    testImplementation(libs.androidx.ui.test.junit4)
+    debugImplementation(libs.androidx.ui.test.manifest)
 }

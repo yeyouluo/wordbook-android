@@ -19,6 +19,9 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Chat
@@ -35,6 +38,7 @@ import androidx.compose.material.icons.filled.Sort
 import androidx.compose.material.icons.filled.VolumeUp
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Card
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.FloatingActionButton
@@ -49,7 +53,9 @@ import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
+import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
@@ -92,6 +98,11 @@ import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.text.input.KeyboardType
 import kotlinx.coroutines.withTimeoutOrNull
 
+/** 无限下滑：首批渲染条数 / 每次续渲染条数 / 底部哨兵的稳定 key */
+private const val FIRST_BATCH = 30
+private const val MORE_BATCH = 30
+private const val FOOTER_KEY = "list_footer_sentinel"
+
 /** 主界面：列表 + 搜索/筛选/排序 + 统计卡片 + 所有弹窗的编排 */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -107,8 +118,6 @@ fun WordBookApp(
     val query by vm.query.collectAsState()
     val filter by vm.filter.collectAsState()
     val sortMode by vm.sortMode.collectAsState()
-    val pageSize by vm.pageSize.collectAsState()
-    val page by vm.page.collectAsState()
     val stats by vm.stats.collectAsState()
     val context = LocalContext.current
     val ioScope = rememberCoroutineScope()
@@ -138,14 +147,27 @@ fun WordBookApp(
         }
     }
 
-    // 分页切片（页码越界自动收敛；答完/删除导致总数变化也会跟着收敛）
+    // 无限下滑：一次先渲染 FIRST_BATCH 个，底部哨兵进入可视区就再放一批。
+    // （词库全量已在内存里，这里只控制「渲染多少」，不是网络分页）
+    val listState = rememberLazyListState()
+    var visibleCount by remember { mutableIntStateOf(FIRST_BATCH) }
     val total = words.size
-    val pageCount = if (total == 0) 1 else (total + pageSize - 1) / pageSize
-    val safePage = page.coerceIn(1, pageCount)
-    LaunchedEffect(total, pageSize, pageCount) {
-        if (page != safePage) vm.setPage(safePage)
+    val shownWords = remember(words, visibleCount) { words.take(visibleCount) }
+    val hasMore = visibleCount < total
+
+    // 筛选 / 排序 / 搜索变化：回到顶部并重置已渲染数量，避免停在上一次的位置
+    LaunchedEffect(query, filter, sortMode) {
+        visibleCount = FIRST_BATCH
+        listState.scrollToItem(0)
     }
-    val pageWords = words.drop((safePage - 1) * pageSize).take(pageSize)
+
+    val footerVisible by remember {
+        derivedStateOf { listState.layoutInfo.visibleItemsInfo.any { it.key == FOOTER_KEY } }
+    }
+    // 触底自动续渲染；footer 一直可见时（一屏就能装下）会连续续到装不下为止
+    LaunchedEffect(footerVisible, hasMore, total) {
+        if (footerVisible && hasMore) visibleCount = (visibleCount + MORE_BATCH).coerceAtMost(total)
+    }
     val batchState by vm.batch.collectAsState()
 
     var showReview by remember { mutableStateOf(false) }
@@ -363,7 +385,7 @@ fun WordBookApp(
                     label = { Text("已掌握") }
                 )
                 Spacer(Modifier.weight(1f))
-                SortMenu(current = sortMode, onPick = { vm.setSortMode(it); vm.setPage(1) })
+                SortMenu(current = sortMode, onPick = { vm.setSortMode(it) })
             }
 
             if (words.isEmpty() && query.isEmpty() && filter == "all" && stats.total == 0) {
@@ -380,32 +402,36 @@ fun WordBookApp(
                     fontSize = 15.sp
                 )
             } else {
-                Column(modifier = Modifier.verticalScroll(rememberScrollState())) {
-                    // 复习统计卡片
-                    StatsBanner(
-                        stats = stats,
-                        onReview = { showReview = true },
-                        onQuiz = { showQuiz = Word(id = -1, spelling = "") },
-                        onShowStats = { showStatsDetail = true }
-                    )
+                LazyColumn(state = listState) {
+                    item(key = "stats") {
+                        // 复习统计卡片
+                        StatsBanner(
+                            stats = stats,
+                            onReview = { showReview = true },
+                            onQuiz = { showQuiz = Word(id = -1, spelling = "") },
+                            onShowStats = { showStatsDetail = true }
+                        )
+                    }
                     // 批量任务进行中：给一个回到进度页的入口（弹窗关掉后也能找回）
                     if (batchState.running) {
-                        Card(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .padding(top = 8.dp)
-                                .clickable { showBatch = true }
-                        ) {
-                            Text(
-                                "🤖 批量查词中 ${batchState.done}/${batchState.total}（点此查看进度）",
-                                fontSize = 13.sp,
-                                color = MaterialTheme.colorScheme.primary,
-                                modifier = Modifier.padding(10.dp)
-                            )
+                        item(key = "batch") {
+                            Card(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(top = 8.dp)
+                                    .clickable { showBatch = true }
+                            ) {
+                                Text(
+                                    "🤖 批量查词中 ${batchState.done}/${batchState.total}（点此查看进度）",
+                                    fontSize = 13.sp,
+                                    color = MaterialTheme.colorScheme.primary,
+                                    modifier = Modifier.padding(10.dp)
+                                )
+                            }
                         }
                     }
-                    Spacer(Modifier.height(8.dp))
-                    pageWords.forEach { word ->
+                    item(key = "gap") { Spacer(Modifier.height(8.dp)) }
+                    items(shownWords, key = { it.id }) { word ->
                         WordCard(
                             word = word,
                             isEditing = editingId == word.id,
@@ -440,16 +466,16 @@ fun WordBookApp(
                             onOpenDetail = { detailWord = word }
                         )
                     }
-                    // 分页页脚（P2）
-                    PaginationFooter(
-                        total = total,
-                        page = safePage,
-                        pageCount = pageCount,
-                        pageSize = pageSize,
-                        onPage = { vm.setPage(it) },
-                        onPageSize = { vm.setPageSize(it); vm.setPage(1) }
-                    )
-                    Spacer(Modifier.height(96.dp))
+                    // 底部哨兵：进入可视区就自动再放一批；也留一个手动兜底入口
+                    item(key = FOOTER_KEY) {
+                        InfiniteFooter(
+                            shown = shownWords.size,
+                            total = total,
+                            hasMore = hasMore,
+                            onLoadMore = { visibleCount = (visibleCount + MORE_BATCH).coerceAtMost(total) }
+                        )
+                    }
+                    item(key = "bottom_gap") { Spacer(Modifier.height(96.dp)) }
                 }
             }
         }
@@ -631,75 +657,39 @@ fun SortMenu(current: String, onPick: (String) -> Unit) {
 }
 
 /**
- * 分页页脚（P2）：「共 N 个词 · 第 x–y · 共 p 页」+ 上一页/下一页 + 每页条数 + 跳页输入。
- * 跳页：Enter 或失焦触发，越界 clamp 到 [1, p]。
+ * 无限下滑页脚（取代原分页组件）。
+ * - 还有更多：显示「已显示 M / 共 N 个词 · 继续下滑自动加载」，并且整块可点（手动兜底）
+ * - 已到底：显示「共 N 个词 · 已经到底了」
+ * 自动续渲染由外层 footer 哨兵可见性驱动，这里只负责展示与兜底点击。
  */
 @Composable
-fun PaginationFooter(
+fun InfiniteFooter(
+    shown: Int,
     total: Int,
-    page: Int,
-    pageCount: Int,
-    pageSize: Int,
-    onPage: (Int) -> Unit,
-    onPageSize: (Int) -> Unit
+    hasMore: Boolean,
+    onLoadMore: () -> Unit
 ) {
-    var jumpText by remember { mutableStateOf("") }
-    var sizePickerOpen by remember { mutableStateOf(false) }
-    val start = if (total == 0) 0 else (page - 1) * pageSize + 1
-    val end = minOf(total, page * pageSize)
-
-    fun jump() {
-        val target = jumpText.trim().toIntOrNull() ?: return
-        onPage(target.coerceIn(1, pageCount))
-        jumpText = ""
-    }
-
-    if (sizePickerOpen) {
-        AlertDialog(
-            onDismissRequest = { sizePickerOpen = false },
-            title = { Text("每页显示") },
-            text = {
-                Column {
-                    WordBookViewModel.PAGE_SIZE_OPTIONS.forEach { n ->
-                        Row(
-                            verticalAlignment = Alignment.CenterVertically,
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .clickable { onPageSize(n); sizePickerOpen = false }
-                                .padding(vertical = 4.dp)
-                        ) {
-                            RadioButton(selected = n == pageSize, onClick = { onPageSize(n); sizePickerOpen = false })
-                            Text("$n 条", fontSize = 13.sp)
-                        }
-                    }
-                }
-            },
-            confirmButton = { TextButton(onClick = { sizePickerOpen = false }) { Text("关闭") } }
-        )
-    }
-
-    Column(modifier = Modifier.fillMaxWidth().padding(top = 8.dp)) {
-        Text(
-            "共 $total 个词 · 第 $start–$end · 共 $pageCount 页",
-            fontSize = 12.sp,
-            color = MaterialTheme.colorScheme.onSurfaceVariant
-        )
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            TextButton(onClick = { onPage(page - 1) }, enabled = page > 1) { Text("上一页", fontSize = 12.sp) }
-            TextButton(onClick = { onPage(page + 1) }, enabled = page < pageCount) { Text("下一页", fontSize = 12.sp) }
-            TextButton(onClick = { sizePickerOpen = true }) { Text("$pageSize/页", fontSize = 12.sp) }
-        }
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            OutlinedTextField(
-                value = jumpText,
-                onValueChange = { t -> jumpText = t.filter { it.isDigit() }.take(5) },
-                label = { Text("跳至第 x 页", fontSize = 11.sp) },
-                modifier = Modifier
-                    .width(150.dp)
-                    .onFocusChanged { if (!it.isFocused && jumpText.isNotBlank()) jump() },
-                singleLine = true,
-                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
-                keyboardActions = KeyboardActions(onDone = { jump() })
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .then(if (hasMore) Modifier.clickable { onLoadMore() } else Modifier)
+            .padding(vertical = 14.dp),
+        horizontalAlignment = Alignment.CenterHorizontally
+    ) {
+        if (hasMore) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                CircularProgressIndicator(modifier = Modifier.size(14.dp), strokeWidth = 2.dp)
+                Text(
+                    "  已显示 $shown / 共 $total 个词 · 继续下滑加载更多（也可点这里）",
+                    fontSize = 12.sp,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+        } else {
+            Text(
+                "共 $total 个词 · 已经到底了",
+                fontSize = 12.sp,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
             )
         }
     }

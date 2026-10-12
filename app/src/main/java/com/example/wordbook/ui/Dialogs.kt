@@ -10,6 +10,9 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Close
@@ -69,15 +72,12 @@ import com.example.wordbook.util.TtsController
 fun ReviewDialog(vm: WordBookViewModel, onSpeak: (String) -> Unit, onClose: () -> Unit) {
     val stats by vm.stats.collectAsState()
     val recallFirst = remember { vm.reviewRecallFirst() }
-    val pageSize = 10
-    var page by remember { mutableIntStateOf(0) }
     // wordId -> 是否已展开释义（答过的词会被移出列表，这里的记录随词条消失）
     val revealed = remember { mutableStateMapOf<Long, Boolean>() }
+    // 无限下滑：去掉「每页 10 个」的分页，整列懒加载；答过的词会即时移出，列表越答越短
+    val listState = rememberLazyListState()
 
     val due = stats.dueWords
-    val pageCount = if (due.isEmpty()) 1 else (due.size + pageSize - 1) / pageSize
-    val safePage = page.coerceIn(0, pageCount - 1)
-    val pageWords = due.drop(safePage * pageSize).take(pageSize)
 
     AlertDialog(
         onDismissRequest = onClose,
@@ -88,17 +88,19 @@ fun ReviewDialog(vm: WordBookViewModel, onSpeak: (String) -> Unit, onClose: () -
             } else {
                 Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
                     Text(
-                        "第 ${safePage + 1} / $pageCount 页（本页 ${pageWords.size} 个）",
+                        "待复习 ${due.size} 个（答过的会立即移出；下滑看更多）",
                         fontSize = 12.sp,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
-                    Column(
+                    // 用 LazyColumn 而不是「Column + verticalScroll」：
+                    // 必须显式给出高度上限，且它本身就是滚动容器，
+                    // 不会再踩「heightIn 写在 verticalScroll 之后 → 滚动范围为 0」的坑。
+                    LazyColumn(
+                        state = listState,
                         verticalArrangement = Arrangement.spacedBy(6.dp),
-                        modifier = Modifier
-                            .verticalScroll(rememberScrollState())
-                            .heightIn(max = 380.dp)
+                        modifier = Modifier.heightIn(max = 420.dp)
                     ) {
-                        pageWords.forEach { word ->
+                        items(due, key = { it.id }) { word ->
                             val shown = !recallFirst || revealed[word.id] == true
                             Card {
                                 Column(modifier = Modifier.fillMaxWidth().padding(10.dp)) {
@@ -173,16 +175,6 @@ fun ReviewDialog(vm: WordBookViewModel, onSpeak: (String) -> Unit, onClose: () -
                                 }
                             }
                         }
-                    }
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        TextButton(
-                            onClick = { page = (safePage - 1).coerceAtLeast(0) },
-                            enabled = safePage > 0
-                        ) { Text("上一页") }
-                        TextButton(
-                            onClick = { page = (safePage + 1).coerceAtMost(pageCount - 1) },
-                            enabled = safePage < pageCount - 1
-                        ) { Text("下一页") }
                     }
                 }
             }
@@ -362,7 +354,7 @@ fun WordDetailDialog(
         text = {
             Column(
                 verticalArrangement = Arrangement.spacedBy(6.dp),
-                modifier = Modifier.verticalScroll(rememberScrollState()).heightIn(min = 320.dp)
+                modifier = Modifier.heightIn(min = 320.dp).verticalScroll(rememberScrollState())
             ) {
                 if (word.meaning.isNotBlank()) Text(word.meaning, fontSize = 15.sp)
                 if (word.example.isNotBlank()) {
@@ -478,9 +470,11 @@ fun AddWordDialog(
             )
         },
         text = {
+            // 显式给出高度上限：verticalScroll 只有拿到「有界」的高度约束才会真正滚动，
+            // 不写上限就得指望 AlertDialog 自己把约束传下来，属于隐式依赖。
             Column(
                 verticalArrangement = Arrangement.spacedBy(8.dp),
-                modifier = Modifier.verticalScroll(rememberScrollState())
+                modifier = Modifier.heightIn(max = 420.dp).verticalScroll(rememberScrollState())
             ) {
                 OutlinedTextField(
                     value = spelling,
@@ -613,7 +607,7 @@ fun BatchAddDialog(vm: WordBookViewModel, onClose: () -> Unit) {
         text = {
             Column(
                 verticalArrangement = Arrangement.spacedBy(8.dp),
-                modifier = Modifier.verticalScroll(rememberScrollState()).heightIn(max = 420.dp)
+                modifier = Modifier.heightIn(max = 420.dp).verticalScroll(rememberScrollState())
             ) {
                 if (!started) {
                     OutlinedTextField(
@@ -750,9 +744,10 @@ fun SettingsDialog(vm: WordBookViewModel, onClose: () -> Unit) {
             title = { Text("选择 AI 厂商") },
             text = {
                 Column(
+                    // heightIn 在前、verticalScroll 在后，否则内容被钳死、弹窗内无法下滑
                     modifier = Modifier
-                        .verticalScroll(rememberScrollState())
                         .heightIn(max = 400.dp)
+                        .verticalScroll(rememberScrollState())
                 ) {
                     vm.providers().forEach { p ->
                         Row(
@@ -796,7 +791,7 @@ fun SettingsDialog(vm: WordBookViewModel, onClose: () -> Unit) {
         text = {
             Column(
                 verticalArrangement = Arrangement.spacedBy(8.dp),
-                modifier = Modifier.verticalScroll(rememberScrollState())
+                modifier = Modifier.heightIn(max = 460.dp).verticalScroll(rememberScrollState())
             ) {
                 OutlinedButton(
                     onClick = { showPicker = true },
@@ -889,7 +884,7 @@ fun SettingsDialog(vm: WordBookViewModel, onClose: () -> Unit) {
                         onDismissRequest = { voicePickerOpen = false },
                         title = { Text("选择发音音色") },
                         text = {
-                            Column(modifier = Modifier.verticalScroll(rememberScrollState()).heightIn(max = 380.dp)) {
+                            Column(modifier = Modifier.heightIn(max = 380.dp).verticalScroll(rememberScrollState())) {
                                 Row(
                                     verticalAlignment = Alignment.CenterVertically,
                                     modifier = Modifier
@@ -1057,7 +1052,7 @@ fun SyncDialog(vm: WordBookViewModel, onClose: () -> Unit) {
         text = {
             Column(
                 verticalArrangement = Arrangement.spacedBy(8.dp),
-                modifier = Modifier.verticalScroll(rememberScrollState())
+                modifier = Modifier.heightIn(max = 460.dp).verticalScroll(rememberScrollState())
             ) {
                 Text(
                     "同步内容只有词库（含全部学习进度），不含 AI Key、不含界面偏好。" +

@@ -129,21 +129,8 @@ class WordBookViewModel(app: Application) : AndroidViewModel(app) {
         prefs.edit().putString(K_SORT_MODE, mode).apply()
     }
 
-    /** 列表每页条数（5/10/20/50/100，默认 20，记住上次选择） */
-    val pageSize = MutableStateFlow(prefs.getInt(K_PAGE_SIZE, 20).let { if (it in PAGE_SIZE_OPTIONS) it else 20 })
-
-    fun setPageSize(size: Int) {
-        val safe = if (size in PAGE_SIZE_OPTIONS) size else 20
-        pageSize.value = safe
-        prefs.edit().putInt(K_PAGE_SIZE, safe).apply()
-    }
-
-    /** 当前页码（1-based，越界由 UI clamp） */
-    val page = MutableStateFlow(1)
-
-    fun setPage(p: Int) {
-        page.value = if (p < 1) 1 else p
-    }
+    /** 列表每页条数已废弃：列表改为「无限下滑」逐批渲染，一次只渲染前 N 个、滚到底再续。
+     *  这里不再保留 pageSize / page 状态，UI 侧用 LazyColumn 自己维护已渲染数量。 */
 
     val words: StateFlow<List<Word>> =
         combine(dao.observeAll(), query, filter, sortMode) { list, q, f, mode ->
@@ -846,12 +833,8 @@ class WordBookViewModel(app: Application) : AndroidViewModel(app) {
         /** 有复习行为的日期集合（连击/本周统计用） */
         private const val K_REVIEW_DAYS = "review_days"
 
-        /** 列表排序模式与每页条数 */
+        /** 列表排序模式（分页已废弃，改为列表无限下滑） */
         private const val K_SORT_MODE = "list_sort_mode"
-        private const val K_PAGE_SIZE = "list_page_size"
-
-        /** 每页条数可选项 */
-        val PAGE_SIZE_OPTIONS = listOf(5, 10, 20, 50, 100)
 
         /** 复习偏好：先回忆再判定 */
         private const val K_RECALL_FIRST = "review_recall_first"

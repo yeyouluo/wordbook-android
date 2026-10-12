@@ -42,6 +42,20 @@ jobs:
       - name: Build debug APK
         run: ./gradlew assembleDebug --no-daemon --stacktrace
 
+      # Robolectric + Compose UI 测试：给「弹窗能不能滑」「列表触底能不能续渲染」上锁。
+      # 跑在 JVM 上，不需要模拟器；首次会下载 Robolectric 的运行时（约 160MB），
+      # GitHub runner 的网络没问题，本机在公司网下会很慢（见 README「受限网络」）。
+      - name: Unit tests (Robolectric + Compose)
+        run: ./gradlew testDebugUnitTest --no-daemon --stacktrace
+
+      - name: Upload test report
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: WordBook-unit-test-report
+          path: app/build/reports/tests/testDebugUnitTest
+          if-no-files-found: warn
+
       - name: Upload APK artifact
         uses: actions/upload-artifact@v7
         with:
