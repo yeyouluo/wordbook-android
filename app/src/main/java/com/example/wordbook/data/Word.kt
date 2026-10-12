@@ -2,6 +2,7 @@ package com.example.wordbook.data
 
 import androidx.room.Entity
 import androidx.room.PrimaryKey
+import kotlinx.serialization.Serializable
 
 /**
  * 单词本里的一条记录。
@@ -10,7 +11,11 @@ import androidx.room.PrimaryKey
  * - mastered：是否已掌握
  * - reviewCount / reviewCorrectCount / lastReviewedAt：复习调度（艾宾浩斯）
  * - totalCorrect / totalWrong：累计答对/答错次数（算正确率，答错不丢历史）
+ * - updatedAt：最后一次修改时间，WebDAV 同步「谁更新用谁」的合并依据
+ *
+ * 同时实现 kotlinx.serialization（用于备份/同步快照）与 Room 实体。
  */
+@Serializable
 @Entity(tableName = "words")
 data class Word(
     @PrimaryKey(autoGenerate = true) val id: Long = 0,
@@ -26,5 +31,6 @@ data class Word(
     val lastReviewedAt: Long = 0,
     val totalCorrect: Int = 0,
     val totalWrong: Int = 0,
-    val createdAt: Long = System.currentTimeMillis()
+    val createdAt: Long = System.currentTimeMillis(),
+    val updatedAt: Long = System.currentTimeMillis()
 )

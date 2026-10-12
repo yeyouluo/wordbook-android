@@ -7,6 +7,7 @@ import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.detectTapGestures
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -24,6 +25,7 @@ import androidx.compose.material.icons.filled.Chat
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Delete
+import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.FileDownload
 import androidx.compose.material.icons.filled.FileUpload
 import androidx.compose.material.icons.filled.PlaylistAdd
@@ -104,6 +106,7 @@ fun WordBookApp(
     var showReview by remember { mutableStateOf(false) }
     var showQuiz by remember { mutableStateOf<Word?>(null) }
     var detailWord by remember { mutableStateOf<Word?>(null) }
+    var editingWord by remember { mutableStateOf<Word?>(null) }
 
     // ---- 定向入口：分享接收 / 桌面快捷方式 ----
     LaunchedEffect(pendingWord) {
@@ -136,23 +139,37 @@ fun WordBookApp(
         }
     }
 
-    // ---- 剪贴板捕捉：每次进程只读一次（屏幕旋转不重读，避免反复触发系统"读取剪贴板"提示） ----
+    // ---- 剪贴板捕捉（问题 #5）：每次回到前台都检查一次 ----
+    // 之前只在进程启动时读一次，导致「复制生词 → 切回 App」不触发；现在挂到 ON_RESUME，
+    // 同一段内容只处理一次（shouldHandleClipboard 去重），不会反复弹窗。
     val prefs: SharedPreferences = remember {
         context.getSharedPreferences("settings", android.content.Context.MODE_PRIVATE)
     }
-    LaunchedEffect(Unit) {
-        delay(800)
-        if (!vm.markClipboardChecked()) return@LaunchedEffect
+    fun checkClipboard() {
         try {
             val cm = context.getSystemService(android.content.ClipboardManager::class.java)
-            val text = cm?.primaryClip?.getItemAt(0)?.text?.toString()?.trim() ?: return@LaunchedEffect
-            val match = Regex("^[A-Za-z][A-Za-z\\-'’]{1,40}$").find(text) ?: return@LaunchedEffect
-            if (prefs.getString("last_clipboard", "") != match.value) {
-                clipboardHint = match.value
-            }
+            val text = cm?.primaryClip?.getItemAt(0)?.text?.toString()?.trim() ?: return
+            val match = Regex("^[A-Za-z][A-Za-z\\-'’]{1,40}$").find(text) ?: return
+            if (prefs.getString("last_clipboard", "") == match.value) return
+            if (!vm.shouldHandleClipboard(match.value)) return
+            clipboardHint = match.value
         } catch (e: Exception) {
-            // 某些系统限制读剪贴板，忽略
+            // 某些系统限制读剪贴板（或未授权），静默降级
         }
+    }
+
+    LaunchedEffect(Unit) {
+        delay(600)
+        checkClipboard()
+    }
+
+    val lifecycleOwner = androidx.lifecycle.compose.LocalLifecycleOwner.current
+    DisposableEffect(lifecycleOwner) {
+        val observer = androidx.lifecycle.LifecycleEventObserver { _, event ->
+            if (event == androidx.lifecycle.Lifecycle.Event.ON_RESUME) checkClipboard()
+        }
+        lifecycleOwner.lifecycle.addObserver(observer)
+        onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
     }
 
     // ---- 导出 CSV ----
@@ -345,6 +362,7 @@ fun WordBookApp(
                             onSpeak = { onSpeak(word.spelling) },
                             onSpeakExample = { if (word.example.isNotBlank()) onSpeak(word.example) },
                             onToggleMastered = { vm.toggleMastered(word) },
+                            onEdit = { editingWord = word },
                             onDelete = { vm.deleteWord(word) },
                             onOpenDetail = { detailWord = word }
                         )
@@ -357,6 +375,10 @@ fun WordBookApp(
 
     if (showAddDialog) {
         AddWordDialog(vm = vm, prefill = addPrefill, onClose = { showAddDialog = false })
+    }
+    // 编辑已有单词（问题 #4）
+    editingWord?.let { word ->
+        AddWordDialog(vm = vm, editing = word, onClose = { editingWord = null })
     }
     if (showSettings) {
         SettingsDialog(vm = vm, onClose = { showSettings = false })
@@ -374,7 +396,16 @@ fun WordBookApp(
         QuizDialog(vm = vm, onSpeak = onSpeak, onClose = { showQuiz = null })
     }
     detailWord?.let { word ->
-        WordDetailDialog(vm = vm, word = word, onSpeak = onSpeak, onClose = { detailWord = null })
+        WordDetailDialog(
+            vm = vm,
+            word = word,
+            onSpeak = onSpeak,
+            onEdit = {
+                editingWord = word
+                detailWord = null
+            },
+            onClose = { detailWord = null }
+        )
     }
 
     // 剪贴板提示
@@ -453,13 +484,14 @@ fun StatsBanner(stats: Stats, onReview: () -> Unit, onQuiz: () -> Unit) {
     }
 }
 
-/** 单词卡片：长按打开详情+AI 问答；右列三个按钮：发音/掌握切换/删除 */
+/** 单词卡片：长按打开详情+AI 问答；右列四个按钮：发音/编辑/掌握切换/删除 */
 @Composable
 fun WordCard(
     word: Word,
     onSpeak: () -> Unit,
     onSpeakExample: () -> Unit,
     onToggleMastered: () -> Unit,
+    onEdit: () -> Unit,
     onDelete: () -> Unit,
     onOpenDetail: () -> Unit
 ) {
@@ -530,6 +562,14 @@ fun WordCard(
                             contentDescription = if (word.mastered) "标记为学习中" else "标记为已掌握",
                             tint = if (word.mastered) MaterialTheme.colorScheme.primary
                             else MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                    // 编辑（问题 #4）
+                    IconButton(onClick = onEdit) {
+                        Icon(
+                            imageVector = Icons.Filled.Edit,
+                            contentDescription = "编辑",
+                            tint = MaterialTheme.colorScheme.onSurfaceVariant
                         )
                     }
                     IconButton(onClick = onDelete) {

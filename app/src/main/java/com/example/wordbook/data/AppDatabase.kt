@@ -7,7 +7,7 @@ import androidx.room.RoomDatabase
 import androidx.room.migration.Migration
 import androidx.sqlite.db.SupportSQLiteDatabase
 
-@Database(entities = [Word::class], version = 3, exportSchema = false)
+@Database(entities = [Word::class], version = 4, exportSchema = false)
 abstract class AppDatabase : RoomDatabase() {
 
     abstract fun wordDao(): WordDao
@@ -31,6 +31,17 @@ abstract class AppDatabase : RoomDatabase() {
             }
         }
 
+        /** v3 -> v4：updatedAt（WebDAV 同步合并依据）；老数据用「复习时间与创建时间的较晚者」回填 */
+        private val MIGRATION_3_4 = object : Migration(3, 4) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("ALTER TABLE words ADD COLUMN updatedAt INTEGER NOT NULL DEFAULT 0")
+                db.execSQL(
+                    "UPDATE words SET updatedAt = " +
+                        "CASE WHEN lastReviewedAt > createdAt THEN lastReviewedAt ELSE createdAt END"
+                )
+            }
+        }
+
         @Volatile
         private var instance: AppDatabase? = null
 
@@ -41,7 +52,7 @@ abstract class AppDatabase : RoomDatabase() {
                     AppDatabase::class.java,
                     "wordbook.db"
                 )
-                    .addMigrations(MIGRATION_1_2, MIGRATION_2_3)
+                    .addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4)
                     .build()
                     .also { instance = it }
             }

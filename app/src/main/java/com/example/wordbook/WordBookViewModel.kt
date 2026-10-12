@@ -10,6 +10,7 @@ import com.example.wordbook.data.AiProviders
 import com.example.wordbook.data.AppDatabase
 import com.example.wordbook.data.Word
 import com.example.wordbook.data.WordDao
+import com.example.wordbook.data.WebDavClient
 import com.example.wordbook.util.CsvUtil
 import com.example.wordbook.util.ReviewSchedule
 import com.example.wordbook.util.ReviewStats
@@ -76,6 +77,14 @@ data class ChatUiMessage(
     val error: Boolean = false
 )
 
+/** WebDAV 同步状态 */
+data class SyncState(
+    val running: Boolean = false,
+    val finished: Boolean = false,
+    val ok: Boolean = false,
+    val message: String = ""
+)
+
 /**
  * 单例 ViewModel：持有数据库 DAO 与 SharedPreferences（存 API Key）。
  * UI 只跟它交互，不直接碰数据库和网络。
@@ -89,13 +98,17 @@ class WordBookViewModel(app: Application) : AndroidViewModel(app) {
     /** 搜索关键字 */
     val query = MutableStateFlow("")
 
-    /** 剪贴板是否已在本进程检查过（避免旋转/重建时重复读取并触发系统提示） */
-    private var clipboardChecked = false
+    /** 剪贴板去重：只对「和上次处理过的不一样」的内容弹提示 */
+    private var lastClipboardHandled: String = ""
 
-    /** 返回 true 表示"这次该检查剪贴板"；同一进程内只放行一次 */
-    fun markClipboardChecked(): Boolean {
-        if (clipboardChecked) return false
-        clipboardChecked = true
+    /**
+     * 每次回到前台都允许检查剪贴板（Android 10+ 只允许有焦点的应用读取），
+     * 但同一段内容只处理一次，避免反复弹窗。
+     */
+    fun shouldHandleClipboard(text: String): Boolean {
+        val t = text.trim()
+        if (t.isEmpty() || t == lastClipboardHandled) return false
+        lastClipboardHandled = t
         return true
     }
 
@@ -159,6 +172,7 @@ class WordBookViewModel(app: Application) : AndroidViewModel(app) {
                     lastReviewedAt = now,
                     totalCorrect = word.totalCorrect + if (correct) 1 else 0,
                     totalWrong = word.totalWrong + if (correct) 0 else 1,
+                    updatedAt = now,
                     mastered = word.mastered || nextCorrect >= ReviewSchedule.MASTER_ON_CORRECT
                 )
             )
@@ -240,15 +254,24 @@ class WordBookViewModel(app: Application) : AndroidViewModel(app) {
     suspend fun getAllWords(): List<Word> = dao.getAllOnce()
 
     fun addWord(word: Word) {
-        viewModelScope.launch { dao.insert(word) }
+        val now = System.currentTimeMillis()
+        viewModelScope.launch { dao.insert(word.copy(createdAt = now, updatedAt = now)) }
     }
 
     fun addWords(words: List<Word>) {
-        viewModelScope.launch { dao.insertAll(words) }
+        val now = System.currentTimeMillis()
+        viewModelScope.launch { dao.insertAll(words.map { it.copy(createdAt = now, updatedAt = now) }) }
+    }
+
+    /** 编辑已有单词（保留 id / 复习统计 / 创建时间） */
+    fun updateWord(word: Word) {
+        viewModelScope.launch { dao.update(word.copy(updatedAt = System.currentTimeMillis())) }
     }
 
     fun toggleMastered(word: Word) {
-        viewModelScope.launch { dao.update(word.copy(mastered = !word.mastered)) }
+        viewModelScope.launch {
+            dao.update(word.copy(mastered = !word.mastered, updatedAt = System.currentTimeMillis()))
+        }
     }
 
     fun deleteWord(word: Word) {
@@ -259,6 +282,16 @@ class WordBookViewModel(app: Application) : AndroidViewModel(app) {
     fun aiLookup(spelling: String, onResult: (AiClient.LookupResult?) -> Unit) {
         viewModelScope.launch {
             onResult(newClient().lookup(spelling))
+        }
+    }
+
+    /** 同上，但把失败原因一并给出（表单里要显示具体原因，而不是笼统"失败"） */
+    fun aiLookupOutcome(
+        spelling: String,
+        onResult: (AiClient.AiOutcome<AiClient.LookupResult>) -> Unit
+    ) {
+        viewModelScope.launch {
+            onResult(newClient().lookupOutcome(spelling))
         }
     }
 
@@ -404,19 +437,41 @@ class WordBookViewModel(app: Application) : AndroidViewModel(app) {
         }
         chatSending.value = true
         viewModelScope.launch {
-            // 历史里带上刚才这条用户消息；错误气泡不入上下文
-            val history = chat.value.filter { !it.error }.map { it.role to it.text }
             val client = newClient()
-            val envelope = client.converse(history)
-            chatSending.value = false
-            if (envelope == null) {
-                chat.value = chat.value + ChatUiMessage(
-                    role = "assistant",
-                    text = "AI 请求失败（网络或额度），点气泡下方「重试」再试一次。",
-                    error = true
-                )
+            var history = trimmedHistory()
+            var outcome = client.converseOutcome(history)
+            var note = ""
+
+            // 失败但上下文不止一条时：自动精简到「只发这一步」重试一次
+            // （用户之前只能靠"清空会话"绕过，这里替他自动做掉）
+            if (!outcome.ok && history.size > 1) {
+                history = listOf(history.last())
+                outcome = client.converseOutcome(history)
+                if (outcome.ok) note = "\n\n（上一轮上下文过长导致失败，已自动精简后重试成功）"
+            }
+
+            // 还不行就降级为纯文本问答：至少让用户拿到答案，只是没有词卡
+            if (!outcome.ok) {
+                val plain = client.chatOutcome(listOf(history.last()))
+                chatSending.value = false
+                if (plain.ok) {
+                    chat.value = chat.value + ChatUiMessage(
+                        role = "assistant",
+                        text = plain.value!! + "\n\n（本次降级为纯文本回答：未能生成可入库的词卡，可点「重试」再试一次）",
+                        error = false
+                    )
+                } else {
+                    chat.value = chat.value + ChatUiMessage(
+                        role = "assistant",
+                        text = "AI 请求失败：${outcome.error ?: plain.error ?: "未知原因"}",
+                        error = true
+                    )
+                }
                 return@launch
             }
+
+            val envelope = outcome.value!!
+            chatSending.value = false
             val drafts = client.toDrafts(envelope)
             if (drafts.size > CHAT_MAX_WORDS) {
                 chat.value = chat.value + ChatUiMessage(
@@ -433,13 +488,51 @@ class WordBookViewModel(app: Application) : AndroidViewModel(app) {
             }
             chat.value = chat.value + ChatUiMessage(
                 role = "assistant",
-                text = envelope.reply.ifBlank {
-                    if (cards.isEmpty()) "（模型没有返回内容）" else "已备好 ${cards.size} 个词条，勾选后入库。"
-                },
+                text = (
+                    envelope.reply.ifBlank {
+                        if (cards.isEmpty()) "（模型没有返回内容）" else "已备好 ${cards.size} 个词条，勾选后入库。"
+                    }
+                    ) + note,
                 drafts = cards
             )
         }
     }
+
+    /**
+     * 送给模型的历史：只保留最近若干条，并限制总字数。
+     * 这样长时间聊天也不会因为上下文过长而失败（问题 #2/#3 的根因）。
+     */
+    private fun trimmedHistory(): List<Pair<String, String>> {
+        val msgs = chat.value.filter { !it.error }
+        val tail = msgs.takeLast(CHAT_HISTORY_MAX_MESSAGES)
+        val kept = ArrayDeque<Pair<String, String>>()
+        var total = 0
+        for (m in tail.asReversed()) {
+            val cost = m.text.length
+            if (total + cost > CHAT_HISTORY_MAX_CHARS && kept.isNotEmpty()) break
+            total += cost
+            kept.addFirst(m.role to m.text)
+        }
+        return kept.toList().ifEmpty { listOf("user" to (msgs.lastOrNull()?.text ?: "")) }
+    }
+
+    /** 把一条会话消息（含词卡）拼成可复制的纯文本 */
+    fun chatMessageToPlainText(msg: ChatUiMessage): String = buildString {
+        if (msg.role == "user") append("我：")
+        append(msg.text)
+        msg.drafts.forEach { d ->
+            append("\n- ").append(d.word.spelling)
+            if (d.word.phonetic.isNotBlank()) append(" ").append(d.word.phonetic)
+            if (d.word.meaning.isNotBlank()) append("\n  释义：").append(d.word.meaning)
+            if (d.word.example.isNotBlank()) append("\n  例句：").append(d.word.example)
+            if (d.word.mnemonic.isNotBlank()) append("\n  记忆：").append(d.word.mnemonic)
+            if (d.word.family.isNotBlank()) append("\n  同根词：").append(d.word.family)
+        }
+    }
+
+    /** 复制整段会话 */
+    fun chatToPlainText(): String =
+        chat.value.joinToString("\n\n") { chatMessageToPlainText(it) }
 
     /** 勾选入库：positions 是某条 assistant 消息内词卡的下标 */
     fun addDrafts(messageIndex: Int, positions: Set<Int>) {
@@ -472,6 +565,162 @@ class WordBookViewModel(app: Application) : AndroidViewModel(app) {
 
     fun clearChat() {
         chat.value = emptyList()
+    }
+
+    // ---------- WebDAV 云同步 ----------
+    val sync = MutableStateFlow(SyncState())
+
+    fun webdavUrl(): String = prefs.getString(K_DAV_URL, "") ?: ""
+    fun webdavUser(): String = prefs.getString(K_DAV_USER, "") ?: ""
+    fun webdavPassword(): String = prefs.getString(K_DAV_PASS, "") ?: ""
+    fun webdavAutoSync(): Boolean = prefs.getBoolean(K_DAV_AUTO, false)
+    fun webdavConfigured(): Boolean =
+        webdavUrl().isNotBlank() && webdavUser().isNotBlank() && webdavPassword().isNotBlank()
+
+    fun saveWebdavConfig(url: String, user: String, password: String, autoSync: Boolean) {
+        prefs.edit()
+            .putString(K_DAV_URL, url.trim())
+            .putString(K_DAV_USER, user.trim())
+            .putString(K_DAV_PASS, password.trim())
+            .putBoolean(K_DAV_AUTO, autoSync)
+            .apply()
+    }
+
+    private fun newDavClient(): WebDavClient =
+        WebDavClient(webdavUrl(), webdavUser(), webdavPassword())
+
+    fun testWebdav() {
+        if (sync.value.running) return
+        sync.value = SyncState(running = true, message = "正在连接…")
+        viewModelScope.launch {
+            val (ok, msg) = newDavClient().testConnection()
+            sync.value = SyncState(running = false, finished = true, ok = ok, message = msg)
+        }
+    }
+
+    /** 智能同步：先拉远端合并（谁新用谁），再把合并结果推回去 */
+    fun syncNow() {
+        if (sync.value.running || !webdavConfigured()) return
+        sync.value = SyncState(running = true, message = "正在同步…")
+        viewModelScope.launch {
+            val client = newDavClient()
+            val (remote, err) = client.download()
+            if (err != null) {
+                sync.value = SyncState(running = false, finished = true, ok = false, message = "下载失败：$err")
+                return@launch
+            }
+            val (added, updated) = if (remote == null) 0 to 0 else mergeRemote(remote)
+            val snapshot = buildSnapshot()
+            val (ok, msg) = client.upload(snapshot)
+            sync.value = SyncState(
+                running = false,
+                finished = true,
+                ok = ok,
+                message = if (ok) {
+                    "同步完成：远端拉取新增 $added 个、更新 $updated 个；" +
+                        "已上传 ${snapshot.words.size} 个单词"
+                } else {
+                    "合并成功（新增 $added / 更新 $updated），但上传失败：$msg"
+                }
+            )
+        }
+    }
+
+    /** 只上传（本机为准） */
+    fun webdavUpload() {
+        if (sync.value.running || !webdavConfigured()) return
+        sync.value = SyncState(running = true, message = "正在上传…")
+        viewModelScope.launch {
+            val snapshot = buildSnapshot()
+            val (ok, msg) = newDavClient().upload(snapshot)
+            sync.value = SyncState(running = false, finished = true, ok = ok, message = msg)
+        }
+    }
+
+    /** 只拉取并合并（不上传） */
+    fun webdavDownload() {
+        if (sync.value.running || !webdavConfigured()) return
+        sync.value = SyncState(running = true, message = "正在拉取…")
+        viewModelScope.launch {
+            val (remote, err) = newDavClient().download()
+            if (err != null) {
+                sync.value = SyncState(running = false, finished = true, ok = false, message = "下载失败：$err")
+                return@launch
+            }
+            if (remote == null) {
+                sync.value = SyncState(
+                    running = false, finished = true, ok = true,
+                    message = "远端还没有快照文件（第一次同步请用「智能同步」上传）"
+                )
+                return@launch
+            }
+            val (added, updated) = mergeRemote(remote)
+            sync.value = SyncState(
+                running = false, finished = true, ok = true,
+                message = "拉取完成：新增 $added 个、更新 $updated 个"
+            )
+        }
+    }
+
+    /** 离开 App 时静默上传（设置里可关） */
+    fun webdavAutoSyncIfEnabled() {
+        if (!webdavAutoSync() || !webdavConfigured() || sync.value.running) return
+        viewModelScope.launch {
+            val snapshot = buildSnapshot()
+            newDavClient().upload(snapshot)
+        }
+    }
+
+    private suspend fun buildSnapshot(): WebDavClient.Snapshot {
+        val days = prefs.getStringSet(K_REVIEW_DAYS, emptySet())?.toList() ?: emptyList()
+        return WebDavClient.Snapshot(
+            words = dao.getAllOnce(),
+            reviewDays = days,
+            device = android.os.Build.MODEL ?: "android"
+        )
+    }
+
+    /** 合并远端：按单词（忽略大小写）配对，谁 updatedAt 新用谁；库中没有的直接插入 */
+    private suspend fun mergeRemote(remote: WebDavClient.Snapshot): Pair<Int, Int> {
+        val localByKey = dao.getAllOnce().associateBy { it.spelling.lowercase() }
+        var added = 0
+        var updated = 0
+        remote.words.forEach { r ->
+            if (r.spelling.isBlank()) return@forEach
+            val key = r.spelling.lowercase()
+            val local = localByKey[key]
+            when {
+                local == null -> {
+                    dao.insert(r.copy(id = 0))
+                    added++
+                }
+                r.updatedAt > local.updatedAt -> {
+                    dao.update(
+                        local.copy(
+                            phonetic = r.phonetic,
+                            meaning = r.meaning,
+                            example = r.example,
+                            mnemonic = r.mnemonic,
+                            family = r.family,
+                            mastered = r.mastered,
+                            reviewCount = r.reviewCount,
+                            reviewCorrectCount = r.reviewCorrectCount,
+                            lastReviewedAt = r.lastReviewedAt,
+                            totalCorrect = r.totalCorrect,
+                            totalWrong = r.totalWrong,
+                            createdAt = minOf(local.createdAt, r.createdAt),
+                            updatedAt = r.updatedAt
+                        )
+                    )
+                    updated++
+                }
+            }
+        }
+        if (remote.reviewDays.isNotEmpty()) {
+            val days = prefs.getStringSet(K_REVIEW_DAYS, emptySet()) ?: emptySet()
+            prefs.edit().putStringSet(K_REVIEW_DAYS, days + remote.reviewDays).apply()
+        }
+        return added to updated
     }
 
     // ---------- CSV 导入 ----------
@@ -577,5 +826,15 @@ class WordBookViewModel(app: Application) : AndroidViewModel(app) {
 
         /** 有复习行为的日期集合（连击/本周统计用） */
         private const val K_REVIEW_DAYS = "review_days"
+
+        /** 会话上下文裁剪：最多带几条历史、总字数上限（防上下文过长导致整轮失败） */
+        private const val CHAT_HISTORY_MAX_MESSAGES = 8
+        private const val CHAT_HISTORY_MAX_CHARS = 4000
+
+        /** WebDAV 云同步配置 */
+        private const val K_DAV_URL = "webdav_url"
+        private const val K_DAV_USER = "webdav_user"
+        private const val K_DAV_PASS = "webdav_pass"
+        private const val K_DAV_AUTO = "webdav_auto"
     }
 }
