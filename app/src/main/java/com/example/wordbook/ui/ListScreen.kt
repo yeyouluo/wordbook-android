@@ -75,6 +75,22 @@ import kotlinx.coroutines.withContext
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
+import androidx.activity.compose.BackHandler
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.text.KeyboardActions
+import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.material3.Button
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
+import androidx.compose.material3.RadioButton
+import androidx.compose.material3.SnackbarDuration
+import androidx.compose.material3.SnackbarHost
+import androidx.compose.material3.SnackbarHostState
+import androidx.compose.material3.SnackbarResult
+import androidx.compose.ui.focus.onFocusChanged
+import androidx.compose.ui.text.input.KeyboardType
+import kotlinx.coroutines.withTimeoutOrNull
 
 /** 主界面：列表 + 搜索/筛选/排序 + 统计卡片 + 所有弹窗的编排 */
 @OptIn(ExperimentalMaterial3Api::class)
@@ -90,7 +106,9 @@ fun WordBookApp(
     val words by vm.words.collectAsState()
     val query by vm.query.collectAsState()
     val filter by vm.filter.collectAsState()
-    val sortAlpha by vm.sortAlpha.collectAsState()
+    val sortMode by vm.sortMode.collectAsState()
+    val pageSize by vm.pageSize.collectAsState()
+    val page by vm.page.collectAsState()
     val stats by vm.stats.collectAsState()
     val context = LocalContext.current
     val ioScope = rememberCoroutineScope()
@@ -102,6 +120,32 @@ fun WordBookApp(
     var showBatch by remember { mutableStateOf(false) }
     var showChat by remember { mutableStateOf(false) }
     var showStatsDetail by remember { mutableStateOf(false) }
+    var editingId by remember { mutableStateOf<Long?>(null) }
+    val snackbarHostState = remember { SnackbarHostState() }
+
+    /** 6 秒撤销窗：Snackbar(action=撤销) 到点自动消失 */
+    fun offerUndo(message: String, onUndo: () -> Unit) {
+        ioScope.launch {
+            val result = withTimeoutOrNull(6000) {
+                snackbarHostState.showSnackbar(
+                    message = message,
+                    actionLabel = "撤销",
+                    withDismissAction = true,
+                    duration = SnackbarDuration.Indefinite
+                )
+            }
+            if (result == SnackbarResult.ActionPerformed) onUndo()
+        }
+    }
+
+    // 分页切片（页码越界自动收敛；答完/删除导致总数变化也会跟着收敛）
+    val total = words.size
+    val pageCount = if (total == 0) 1 else (total + pageSize - 1) / pageSize
+    val safePage = page.coerceIn(1, pageCount)
+    LaunchedEffect(total, pageSize, pageCount) {
+        if (page != safePage) vm.setPage(safePage)
+    }
+    val pageWords = words.drop((safePage - 1) * pageSize).take(pageSize)
     val batchState by vm.batch.collectAsState()
 
     var showReview by remember { mutableStateOf(false) }
@@ -239,6 +283,7 @@ fun WordBookApp(
     }
 
     Scaffold(
+        snackbarHost = { SnackbarHost(snackbarHostState) },
         topBar = {
             TopAppBar(
                 title = { Text("单词本") },
@@ -318,14 +363,7 @@ fun WordBookApp(
                     label = { Text("已掌握") }
                 )
                 Spacer(Modifier.weight(1f))
-                IconButton(onClick = { vm.sortAlpha.value = !sortAlpha }) {
-                    Icon(
-                        Icons.Filled.Sort,
-                        contentDescription = if (sortAlpha) "按时间排序" else "按字母排序",
-                        tint = if (sortAlpha) MaterialTheme.colorScheme.primary
-                        else MaterialTheme.colorScheme.onSurfaceVariant
-                    )
-                }
+                SortMenu(current = sortMode, onPick = { vm.setSortMode(it); vm.setPage(1) })
             }
 
             if (words.isEmpty() && query.isEmpty() && filter == "all" && stats.total == 0) {
@@ -367,17 +405,51 @@ fun WordBookApp(
                         }
                     }
                     Spacer(Modifier.height(8.dp))
-                    words.forEach { word ->
+                    pageWords.forEach { word ->
                         WordCard(
                             word = word,
+                            isEditing = editingId == word.id,
                             onSpeak = { onSpeak(word.spelling) },
                             onSpeakExample = { if (word.example.isNotBlank()) onSpeak(word.example) },
-                            onToggleMastered = { vm.toggleMastered(word) },
+                            onToggleMastered = {
+                                val target = !word.mastered
+                                vm.setMasteredAbsolute(word, target)
+                                offerUndo(
+                                    if (target) "已标记掌握「${word.spelling}」" else "已取消掌握「${word.spelling}」"
+                                ) { vm.setMasteredAbsolute(word, word.mastered) }
+                            },
+                            onStartEdit = { editingId = word.id },
+                            onCancelEdit = { editingId = null },
+                            onSaveEdit = { fields ->
+                                vm.updateWord(
+                                    word.copy(
+                                        spelling = fields.spelling,
+                                        phonetic = fields.phonetic,
+                                        meaning = fields.meaning,
+                                        example = fields.example,
+                                        mnemonic = fields.mnemonic,
+                                        family = fields.family
+                                    )
+                                )
+                                editingId = null
+                            },
                             onEdit = { editingWord = word },
-                            onDelete = { vm.deleteWord(word) },
+                            onDelete = {
+                                vm.deleteWord(word)
+                                offerUndo("已删除「${word.spelling}」") { vm.restoreWord(word) }
+                            },
                             onOpenDetail = { detailWord = word }
                         )
                     }
+                    // 分页页脚（P2）
+                    PaginationFooter(
+                        total = total,
+                        page = safePage,
+                        pageCount = pageCount,
+                        pageSize = pageSize,
+                        onPage = { vm.setPage(it) },
+                        onPageSize = { vm.setPageSize(it); vm.setPage(1) }
+                    )
                     Spacer(Modifier.height(96.dp))
                 }
             }
@@ -506,17 +578,226 @@ fun StatsBanner(
     }
 }
 
-/** 单词卡片：长按打开详情+AI 问答；右列四个按钮：发音/编辑/掌握切换/删除 */
+/** 行内编辑的字段载体（P2） */
+data class InlineEditFields(
+    val spelling: String,
+    val phonetic: String,
+    val meaning: String,
+    val example: String,
+    val mnemonic: String,
+    val family: String
+)
+
+/** 排序四模下拉（P2）：时间新→旧 / 时间旧→新 / 字母 A→Z / Z→A，选择会被记住 */
+@Composable
+fun SortMenu(current: String, onPick: (String) -> Unit) {
+    var open by remember { mutableStateOf(false) }
+    val label = when (current) {
+        "time_asc" -> "时间旧→新"
+        "alpha_asc" -> "字母 A→Z"
+        "alpha_desc" -> "字母 Z→A"
+        else -> "时间新→旧"
+    }
+    Box {
+        TextButton(onClick = { open = true }) {
+            Icon(
+                Icons.Filled.Sort,
+                contentDescription = "排序方式",
+                modifier = Modifier.size(16.dp)
+            )
+            Text(" $label", fontSize = 12.sp)
+        }
+        DropdownMenu(expanded = open, onDismissRequest = { open = false }) {
+            listOf(
+                "time_desc" to "时间新→旧",
+                "time_asc" to "时间旧→新",
+                "alpha_asc" to "字母 A→Z",
+                "alpha_desc" to "字母 Z→A"
+            ).forEach { (mode, text) ->
+                DropdownMenuItem(
+                    text = { Text(text, fontSize = 13.sp) },
+                    onClick = {
+                        onPick(mode)
+                        open = false
+                    },
+                    leadingIcon = {
+                        if (mode == current) {
+                            Icon(Icons.Filled.Check, contentDescription = null, modifier = Modifier.size(16.dp))
+                        }
+                    }
+                )
+            }
+        }
+    }
+}
+
+/**
+ * 分页页脚（P2）：「共 N 个词 · 第 x–y · 共 p 页」+ 上一页/下一页 + 每页条数 + 跳页输入。
+ * 跳页：Enter 或失焦触发，越界 clamp 到 [1, p]。
+ */
+@Composable
+fun PaginationFooter(
+    total: Int,
+    page: Int,
+    pageCount: Int,
+    pageSize: Int,
+    onPage: (Int) -> Unit,
+    onPageSize: (Int) -> Unit
+) {
+    var jumpText by remember { mutableStateOf("") }
+    var sizePickerOpen by remember { mutableStateOf(false) }
+    val start = if (total == 0) 0 else (page - 1) * pageSize + 1
+    val end = minOf(total, page * pageSize)
+
+    fun jump() {
+        val target = jumpText.trim().toIntOrNull() ?: return
+        onPage(target.coerceIn(1, pageCount))
+        jumpText = ""
+    }
+
+    if (sizePickerOpen) {
+        AlertDialog(
+            onDismissRequest = { sizePickerOpen = false },
+            title = { Text("每页显示") },
+            text = {
+                Column {
+                    WordBookViewModel.PAGE_SIZE_OPTIONS.forEach { n ->
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clickable { onPageSize(n); sizePickerOpen = false }
+                                .padding(vertical = 4.dp)
+                        ) {
+                            RadioButton(selected = n == pageSize, onClick = { onPageSize(n); sizePickerOpen = false })
+                            Text("$n 条", fontSize = 13.sp)
+                        }
+                    }
+                }
+            },
+            confirmButton = { TextButton(onClick = { sizePickerOpen = false }) { Text("关闭") } }
+        )
+    }
+
+    Column(modifier = Modifier.fillMaxWidth().padding(top = 8.dp)) {
+        Text(
+            "共 $total 个词 · 第 $start–$end · 共 $pageCount 页",
+            fontSize = 12.sp,
+            color = MaterialTheme.colorScheme.onSurfaceVariant
+        )
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            TextButton(onClick = { onPage(page - 1) }, enabled = page > 1) { Text("上一页", fontSize = 12.sp) }
+            TextButton(onClick = { onPage(page + 1) }, enabled = page < pageCount) { Text("下一页", fontSize = 12.sp) }
+            TextButton(onClick = { sizePickerOpen = true }) { Text("$pageSize/页", fontSize = 12.sp) }
+        }
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            OutlinedTextField(
+                value = jumpText,
+                onValueChange = { t -> jumpText = t.filter { it.isDigit() }.take(5) },
+                label = { Text("跳至第 x 页", fontSize = 11.sp) },
+                modifier = Modifier
+                    .width(150.dp)
+                    .onFocusChanged { if (!it.isFocused && jumpText.isNotBlank()) jump() },
+                singleLine = true,
+                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                keyboardActions = KeyboardActions(onDone = { jump() })
+            )
+        }
+    }
+}
+
+/**
+ * 单词卡片：长按打开详情+AI 问答；右列四个按钮：发音/编辑/掌握切换/删除。
+ * P2：支持**行内编辑**（isEditing=true 时在卡片内直接改六个字段，保存调 dao.update）。
+ */
 @Composable
 fun WordCard(
     word: Word,
+    isEditing: Boolean = false,
     onSpeak: () -> Unit,
     onSpeakExample: () -> Unit,
     onToggleMastered: () -> Unit,
-    onEdit: () -> Unit,
+    onStartEdit: () -> Unit = {},
+    onCancelEdit: () -> Unit = {},
+    onSaveEdit: (InlineEditFields) -> Unit = {},
     onDelete: () -> Unit,
     onOpenDetail: () -> Unit
 ) {
+    if (isEditing) {
+        var spelling by remember(word.id) { mutableStateOf(word.spelling) }
+        var phonetic by remember(word.id) { mutableStateOf(word.phonetic) }
+        var meaning by remember(word.id) { mutableStateOf(word.meaning) }
+        var example by remember(word.id) { mutableStateOf(word.example) }
+        var mnemonic by remember(word.id) { mutableStateOf(word.mnemonic) }
+        var family by remember(word.id) { mutableStateOf(word.family) }
+        // 返回键 = 取消（桌面端也可用「取消」按钮）
+        BackHandler(enabled = true) { onCancelEdit() }
+        Card(modifier = Modifier.fillMaxWidth().padding(vertical = 6.dp)) {
+            Column(
+                verticalArrangement = Arrangement.spacedBy(6.dp),
+                modifier = Modifier.padding(12.dp)
+            ) {
+                OutlinedTextField(
+                    value = spelling,
+                    onValueChange = { spelling = it },
+                    label = { Text("单词") },
+                    modifier = Modifier.fillMaxWidth(),
+                    singleLine = true
+                )
+                OutlinedTextField(
+                    value = phonetic,
+                    onValueChange = { phonetic = it },
+                    label = { Text("音标") },
+                    modifier = Modifier.fillMaxWidth(),
+                    singleLine = true
+                )
+                OutlinedTextField(
+                    value = meaning,
+                    onValueChange = { meaning = it },
+                    label = { Text("释义") },
+                    modifier = Modifier.fillMaxWidth()
+                )
+                OutlinedTextField(
+                    value = example,
+                    onValueChange = { example = it },
+                    label = { Text("例句") },
+                    modifier = Modifier.fillMaxWidth()
+                )
+                OutlinedTextField(
+                    value = mnemonic,
+                    onValueChange = { mnemonic = it },
+                    label = { Text("记忆法") },
+                    modifier = Modifier.fillMaxWidth()
+                )
+                OutlinedTextField(
+                    value = family,
+                    onValueChange = { family = it },
+                    label = { Text("同根词") },
+                    modifier = Modifier.fillMaxWidth()
+                )
+                Row {
+                    TextButton(onClick = onCancelEdit) { Text("取消") }
+                    Spacer(Modifier.weight(1f))
+                    Button(
+                        onClick = {
+                            onSaveEdit(
+                                InlineEditFields(
+                                    spelling = spelling.trim(),
+                                    phonetic = phonetic.trim(),
+                                    meaning = meaning.trim(),
+                                    example = example.trim(),
+                                    mnemonic = mnemonic.trim(),
+                                    family = family.trim()
+                                )
+                            )
+                        },
+                        enabled = spelling.isNotBlank()
+                    ) { Text("保存") }
+                }
+            }
+        }
+        return
+    }
     Card(modifier = Modifier.fillMaxWidth().padding(vertical = 6.dp)) {
         Column(modifier = Modifier.pointerInput(word.id) {
             detectTapGestures(onLongPress = { onOpenDetail() })
@@ -586,11 +867,11 @@ fun WordCard(
                             else MaterialTheme.colorScheme.onSurfaceVariant
                         )
                     }
-                    // 编辑（问题 #4）
-                    IconButton(onClick = onEdit) {
+                    // 行内编辑（P2）：直接在本条内改；长按卡片仍可进详情后编辑
+                    IconButton(onClick = onStartEdit) {
                         Icon(
                             imageVector = Icons.Filled.Edit,
-                            contentDescription = "编辑",
+                            contentDescription = "行内编辑",
                             tint = MaterialTheme.colorScheme.onSurfaceVariant
                         )
                     }

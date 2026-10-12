@@ -3,6 +3,7 @@ package com.example.wordbook.data
 import androidx.room.Dao
 import androidx.room.Delete
 import androidx.room.Insert
+import androidx.room.OnConflictStrategy
 import androidx.room.Query
 import androidx.room.Transaction
 import androidx.room.Update
@@ -46,6 +47,10 @@ interface WordDao {
 
     @Query("DELETE FROM words")
     suspend fun deleteAll()
+
+    /** 撤销删除用：带上原 id 与全部字段写回（REPLACE 避免 id 冲突） */
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun restore(word: Word): Long
 
     /**
      * 云同步 pull 用：整表替换（事务内先清空再写入），

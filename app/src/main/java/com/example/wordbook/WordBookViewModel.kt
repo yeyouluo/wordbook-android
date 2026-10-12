@@ -121,11 +121,32 @@ class WordBookViewModel(app: Application) : AndroidViewModel(app) {
     /** 列表筛选：all / learning / mastered */
     val filter = MutableStateFlow("all")
 
-    /** 是否按字母序排列 */
-    val sortAlpha = MutableStateFlow(false)
+    /** 排序四模：time_desc / time_asc / alpha_asc / alpha_desc（记住上次选择） */
+    val sortMode = MutableStateFlow(prefs.getString(K_SORT_MODE, "time_desc") ?: "time_desc")
+
+    fun setSortMode(mode: String) {
+        sortMode.value = mode
+        prefs.edit().putString(K_SORT_MODE, mode).apply()
+    }
+
+    /** 列表每页条数（5/10/20/50/100，默认 20，记住上次选择） */
+    val pageSize = MutableStateFlow(prefs.getInt(K_PAGE_SIZE, 20).let { if (it in PAGE_SIZE_OPTIONS) it else 20 })
+
+    fun setPageSize(size: Int) {
+        val safe = if (size in PAGE_SIZE_OPTIONS) size else 20
+        pageSize.value = safe
+        prefs.edit().putInt(K_PAGE_SIZE, safe).apply()
+    }
+
+    /** 当前页码（1-based，越界由 UI clamp） */
+    val page = MutableStateFlow(1)
+
+    fun setPage(p: Int) {
+        page.value = if (p < 1) 1 else p
+    }
 
     val words: StateFlow<List<Word>> =
-        combine(dao.observeAll(), query, filter, sortAlpha) { list, q, f, alpha ->
+        combine(dao.observeAll(), query, filter, sortMode) { list, q, f, mode ->
             var result = when {
                 q.isNotBlank() -> list.filter {
                     it.spelling.contains(q, ignoreCase = true) ||
@@ -138,7 +159,12 @@ class WordBookViewModel(app: Application) : AndroidViewModel(app) {
                 "mastered" -> result.filter { it.mastered }
                 else -> result
             }
-            if (alpha) result.sortedBy { it.spelling.lowercase() } else result
+            when (mode) {
+                "time_asc" -> result.sortedBy { it.createdAt }
+                "alpha_asc" -> result.sortedBy { it.spelling.lowercase() }
+                "alpha_desc" -> result.sortedByDescending { it.spelling.lowercase() }
+                else -> result.sortedByDescending { it.createdAt }
+            }
         }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
 
     val stats: StateFlow<Stats> = dao.observeAll().map { list ->
@@ -292,6 +318,23 @@ class WordBookViewModel(app: Application) : AndroidViewModel(app) {
 
     fun deleteWord(word: Word) {
         viewModelScope.launch { dao.delete(word) }
+    }
+
+    /**
+     * 撤销删除：把原 Word 对象（含原 id 与全部学习进度字段）整体写回。
+     * 用 REPLACE 插入，保证"内容和进度分毫不差地回来"。
+     */
+    fun restoreWord(word: Word) {
+        viewModelScope.launch { dao.restore(word) }
+    }
+
+    /**
+     * 撤销"标记掌握"：**绝对写回**指定状态（不是再 toggle 一次，避免二次翻转）。
+     */
+    fun setMasteredAbsolute(word: Word, mastered: Boolean) {
+        viewModelScope.launch {
+            dao.update(word.copy(mastered = mastered, updatedAt = System.currentTimeMillis()))
+        }
     }
 
     // ---------- AI ----------
@@ -785,6 +828,13 @@ class WordBookViewModel(app: Application) : AndroidViewModel(app) {
 
         /** 有复习行为的日期集合（连击/本周统计用） */
         private const val K_REVIEW_DAYS = "review_days"
+
+        /** 列表排序模式与每页条数 */
+        private const val K_SORT_MODE = "list_sort_mode"
+        private const val K_PAGE_SIZE = "list_page_size"
+
+        /** 每页条数可选项 */
+        val PAGE_SIZE_OPTIONS = listOf(5, 10, 20, 50, 100)
 
         /** 复习偏好：先回忆再判定 */
         private const val K_RECALL_FIRST = "review_recall_first"
