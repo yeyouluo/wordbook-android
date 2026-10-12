@@ -64,6 +64,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
@@ -102,6 +103,12 @@ import kotlinx.coroutines.withTimeoutOrNull
 private const val FIRST_BATCH = 30
 private const val MORE_BATCH = 30
 private const val FOOTER_KEY = "list_footer_sentinel"
+
+// 供 JVM 上的 Compose 测试定位滚动容器（ScrollRegressionTest）。用 tag 而不是
+// hasScrollAction()，是因为弹窗里常常有「外层内容 + 内层列表」两个可滚动节点。
+internal const val WORD_LIST_TAG = "word_list"
+internal const val REVIEW_LIST_TAG = "review_word_list"
+internal const val PROVIDER_PICKER_TAG = "provider_picker_list"
 
 /** 主界面：列表 + 搜索/筛选/排序 + 统计卡片 + 所有弹窗的编排 */
 @OptIn(ExperimentalMaterial3Api::class)
@@ -402,7 +409,8 @@ fun WordBookApp(
                     fontSize = 15.sp
                 )
             } else {
-                LazyColumn(state = listState) {
+                // testTag 供 JVM 上的 Compose 测试定位这个列表（见 ScrollRegressionTest）
+                LazyColumn(state = listState, modifier = Modifier.testTag(WORD_LIST_TAG)) {
                     item(key = "stats") {
                         // 复习统计卡片
                         StatsBanner(

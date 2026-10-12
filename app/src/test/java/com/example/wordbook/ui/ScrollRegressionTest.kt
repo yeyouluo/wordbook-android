@@ -3,13 +3,14 @@ package com.example.wordbook.ui
 import android.app.Application
 import androidx.compose.ui.semantics.SemanticsProperties
 import androidx.compose.ui.test.assertIsDisplayed
-import androidx.compose.ui.test.hasScrollAction
 import androidx.compose.ui.test.hasText
 import androidx.compose.ui.test.junit4.createComposeRule
+import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
-import androidx.compose.ui.test.performScrollToIndex
 import androidx.compose.ui.test.performScrollToNode
+import androidx.compose.ui.test.performTouchInput
+import androidx.compose.ui.test.swipeUp
 import androidx.test.core.app.ApplicationProvider
 import com.example.wordbook.WordBookViewModel
 import com.example.wordbook.data.AppDatabase
@@ -83,7 +84,7 @@ class ScrollRegressionTest {
         compose.onNodeWithText("w11").assertIsDisplayed()
 
         // 最关键的一步：滚到列表最后一项。滚动范围为 0 时这里永远到不了 → 直接失败。
-        compose.onNode(hasScrollAction()).performScrollToNode(hasText("w00"))
+        compose.onNodeWithTag(REVIEW_LIST_TAG).performScrollToNode(hasText("w00"))
         compose.onNodeWithText("w00").assertIsDisplayed()
     }
 
@@ -97,10 +98,16 @@ class ScrollRegressionTest {
         compose.onNode(hasText("厂商：", substring = true)).performClick()
         waitForText("选择 AI 厂商")
 
-        // 8 个厂商（含自定义）在 400dp 上限里放不下，最后一个必须能滑到
-        compose.onNode(hasScrollAction()).performScrollToNode(hasText("自定义（OpenAI 兼容）"))
+        // 8 个厂商（含自定义）在 400dp 上限里放不下，最后一个必须能滑到。
+        // 注意用 tag 定位内层列表：这个弹窗里外层「设置内容」本身也是可滚动的。
+        compose.onNodeWithTag(PROVIDER_PICKER_TAG).performScrollToNode(hasText("自定义（OpenAI 兼容）"))
         compose.onNodeWithText("自定义（OpenAI 兼容）").assertIsDisplayed()
     }
+
+    /** 列表当前的可滚动上限（px）。它会随「渲染进来的条目变多」而变大。 */
+    private fun maxScroll(): Float =
+        compose.onNodeWithTag(WORD_LIST_TAG).fetchSemanticsNode()
+            .config[SemanticsProperties.VerticalScrollAxisRange].maxValue()
 
     @Test
     fun `单词列表滚到底会自动续渲染下一批`() {
@@ -116,19 +123,29 @@ class ScrollRegressionTest {
             )
         }
         waitForText("w69") // 70 个词，最新的在最上面
-
-        fun rowCount(): Int =
-            compose.onNode(hasScrollAction()).fetchSemanticsNode()
-                .config[SemanticsProperties.CollectionInfo].rowCount
-
-        val before = rowCount()
-        assertTrue("首批不应一次渲染全部 70 个词（实际 $before 行）", before < 70)
-
-        // 滑到底部（哨兵进入可视区）→ 触发自动续渲染
-        compose.onNode(hasScrollAction()).performScrollToIndex(before - 1)
         compose.waitForIdle()
 
-        val after = rowCount()
-        assertTrue("滚到底部后应续渲染更多（$before → $after）", after > before)
+        // 断言「内容上限持续增长」，而不是断言某个具体词或页脚文案：
+        // LazyColumn 只组合可视项，滚过去的具体条目会被回收，
+        // 页脚更是"一可见就立刻触发加载、随即被顶出屏幕"——拿它们做断言都不稳定。
+        val m0 = maxScroll()
+
+        val list = compose.onNodeWithTag(WORD_LIST_TAG)
+        list.performScrollToNode(hasText("w40")) // 滑到首批最后一个词 → 底部哨兵进入可视区
+        compose.waitForIdle()
+        val m1 = maxScroll()
+
+        list.performTouchInput { swipeUp() }
+        compose.waitForIdle()
+        val m2 = maxScroll()
+
+        list.performTouchInput { swipeUp() }
+        compose.waitForIdle()
+        val m3 = maxScroll()
+
+        assertTrue(
+            "每次滑到底都应再渲染一批（可滚动上限应持续变大）：$m0 → $m1 → $m2 → $m3",
+            m1 > m0 && m2 > m1 && m3 > m2
+        )
     }
 }

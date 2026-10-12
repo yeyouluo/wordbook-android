@@ -45,6 +45,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
@@ -98,7 +99,8 @@ fun ReviewDialog(vm: WordBookViewModel, onSpeak: (String) -> Unit, onClose: () -
                     LazyColumn(
                         state = listState,
                         verticalArrangement = Arrangement.spacedBy(6.dp),
-                        modifier = Modifier.heightIn(max = 420.dp)
+                        // testTag 供 JVM 上的 Compose 测试定位这个滚动容器（见 ScrollRegressionTest）
+                        modifier = Modifier.testTag(REVIEW_LIST_TAG).heightIn(max = 420.dp)
                     ) {
                         items(due, key = { it.id }) { word ->
                             val shown = !recallFirst || revealed[word.id] == true
@@ -746,6 +748,7 @@ fun SettingsDialog(vm: WordBookViewModel, onClose: () -> Unit) {
                 Column(
                     // heightIn 在前、verticalScroll 在后，否则内容被钳死、弹窗内无法下滑
                     modifier = Modifier
+                        .testTag(PROVIDER_PICKER_TAG)
                         .heightIn(max = 400.dp)
                         .verticalScroll(rememberScrollState())
                 ) {

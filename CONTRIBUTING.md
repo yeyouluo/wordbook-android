@@ -43,8 +43,16 @@ echo "mavenProxy=http://127.0.0.1:18080" >> local.properties  # 该文件不入�
 
 ```bash
 ./gradlew assembleDebug        # 必须通过
+./gradlew testDebugUnitTest    # Robolectric + Compose UI 测试（JVM，无需真机/模拟器）
 ./gradlew lintDebug            # 关注新增的 error / 有意义的 warning
 ```
+
+改了界面交互（尤其是**弹窗里的滚动、列表触底加载**）就顺手补一条测试：
+`app/src/test/java/com/example/wordbook/ui/ScrollRegressionTest.kt` 里用 `performScrollToNode`
+驱动真实弹窗断言"能滑到最后一项"。
+
+⚠️ 受限网络下首次跑测试要下载 Robolectric 的运行时（约 160MB），会比较慢；
+有本地代理时构建脚本会自动把下载指向 `mavenProxy`（见 `local.properties`），没配就走官方源。
 
 顺手看一眼 `git status`：不要提交 `local.properties`、`keystore/`、`.gradle/`、`.kotlin/`、`app/build/`。
 
