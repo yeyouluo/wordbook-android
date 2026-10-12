@@ -3,7 +3,6 @@ package com.example.wordbook
 import android.content.Intent
 import android.content.SharedPreferences
 import android.os.Bundle
-import android.speech.tts.TextToSpeech
 import android.widget.Toast
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
@@ -19,6 +18,7 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import com.example.wordbook.ui.WordBookApp
+import com.example.wordbook.util.TtsController
 import com.example.wordbook.ui.appColorScheme
 import java.util.Locale
 
@@ -32,8 +32,6 @@ class MainActivity : ComponentActivity() {
     /** Activity 持有 VM：离开 App 时要触发「自动云同步」 */
     private val vm: WordBookViewModel by viewModels()
 
-    private var tts: TextToSpeech? = null
-    private var ttsReady = false
     private var pendingSpeak: String? = null
 
     private var pendingWord by mutableStateOf<String?>(null)
@@ -44,6 +42,14 @@ class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         initTts()
+        TtsController.onReadyChanged {
+            if (TtsController.isReady()) {
+                _showTtsHint = false
+                flushPendingSpeak()
+            } else {
+                _showTtsHint = true
+            }
+        }
         readIntent(intent)
         setContent {
             Surface(modifier = Modifier.fillMaxSize()) {
@@ -123,65 +129,30 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun initTts() {
-        tts?.stop()
-        tts?.shutdown()
-        tts = TextToSpeech(this) { status ->
-            if (status == TextToSpeech.SUCCESS) {
-                // 语言降级链：美式英语 -> 英式英语 -> 简体中文 -> 系统默认。
-                // 只要任意一档可用就视为引擎就绪（有的引擎没有英文数据仍会读单词）。
-                val candidates = listOf(
-                    Locale.US,
-                    Locale.UK,
-                    Locale.SIMPLIFIED_CHINESE
-                )
-                var anyUsable = false
-                for (l in candidates) {
-                    val r = tts?.setLanguage(l)
-                    if (r != TextToSpeech.LANG_MISSING_DATA && r != TextToSpeech.LANG_NOT_SUPPORTED) {
-                        anyUsable = true
-                        break
-                    }
-                }
-                if (!anyUsable) {
-                    tts?.setLanguage(Locale.getDefault())
-                }
-                ttsReady = true
-                // 引擎重绑成功后补播用户点的那一次
-                pendingSpeak?.let { p ->
-                    pendingSpeak = null
-                    speak(p)
-                }
-            } else {
-                // 手机上仍没有可用引擎：给出引导（装引擎/切引擎后再点喇叭会自动重试）
-                ttsReady = false
-                pendingSpeak = null
-                _showTtsHint = true
-            }
-        }
+        TtsController.init(this)
     }
 
     private fun speak(text: String) {
-        if (ttsReady && tts != null) {
-            try {
-                tts?.setSpeechRate(0.9f)
-                val res = tts?.speak(text, TextToSpeech.QUEUE_FLUSH, null, "wordbook_tts")
-                if (res == TextToSpeech.ERROR) {
-                    Toast.makeText(
-                        this,
-                        "语音引擎暂时异常，可到 系统设置-更多设置-无障碍-TTS 重新选择语音引擎",
-                        Toast.LENGTH_LONG
-                    ).show()
-                }
-            } catch (e: Exception) {
-                // 引擎被换/被杀后旧实例失效：重建并直接补播这一次
-                ttsReady = false
-                pendingSpeak = text
-                initTts()
-            }
-        } else {
-            // 每次“点击都重试重建”——用户在系统设置里切完引擎回来，点喇叭即可用，无需杀 APP
-            pendingSpeak = text
-            initTts()
+        if (TtsController.isReady()) {
+            TtsController.speak(text)
+            return
+        }
+        // 引擎尚未就绪：重建一次并记下这次要读的内容（用户切完引擎回来点喇叭即可用）
+        pendingSpeak = text
+        TtsController.shutdown()
+        TtsController.init(this)
+    }
+
+    private fun showNoEngineToast() {
+        _showTtsHint = true
+    }
+
+    /** 引擎就绪后补播用户点的那一次 */
+    private fun flushPendingSpeak() {
+        val text = pendingSpeak ?: return
+        if (TtsController.isReady()) {
+            pendingSpeak = null
+            TtsController.speak(text)
         }
     }
 
@@ -202,9 +173,7 @@ class MainActivity : ComponentActivity() {
     }
 
     override fun onDestroy() {
-        tts?.stop()
-        tts?.shutdown()
-        tts = null
+        TtsController.shutdown()
         super.onDestroy()
     }
 

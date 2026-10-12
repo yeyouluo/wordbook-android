@@ -201,10 +201,19 @@ class AiClient(
      * - 用户只是提问 → words 为空数组
      * 意图识别交给模型（system prompt 里写明契约），APP 不再写规则判断。
      */
-    suspend fun converse(history: List<Pair<String, String>>): ChatEnvelope? = converseOutcome(history).value
+    suspend fun converse(
+        history: List<Pair<String, String>>,
+        maxWords: Int = 20
+    ): ChatEnvelope? = converseOutcome(history, maxWords).value
 
-    /** 同上，带失败原因（会话窗口需要把原因显示出来） */
-    suspend fun converseOutcome(history: List<Pair<String, String>>): AiOutcome<ChatEnvelope> =
+    /**
+     * 同上，带失败原因（会话窗口需要把原因显示出来）。
+     * @param maxWords 单条消息最多接受多少词条（P3：由设置项决定，写进 system prompt）
+     */
+    suspend fun converseOutcome(
+        history: List<Pair<String, String>>,
+        maxWords: Int = 20
+    ): AiOutcome<ChatEnvelope> =
         withContext(Dispatchers.IO) {
             if (apiKey.isBlank()) return@withContext AiOutcome(error = "还没有填 API Key")
             if (!isConfigured()) return@withContext AiOutcome(error = "baseUrl 或模型名为空")
@@ -218,7 +227,7 @@ class AiClient(
                     "\"family\":[{\"w\":\"同根词\",\"m\":\"不超过10字中文释义\"}]}]}。" +
                     "规则：只有当用户消息里包含需要加入词库的英文单词时才填 words，" +
                     "每个词字段尽量填全（family 3-6 个，按词频排序）；" +
-                    "words 最多 20 个，超出时只取前 20 个并在 reply 里说明；" +
+                    "words 最多 $maxWords 个，超出时只取前 $maxWords 个并在 reply 里说明；" +
                     "用户只是提问、聊天、问用法时 words 必须是空数组 []。" +
                     "不要输出 JSON 以外的任何内容。"
             )

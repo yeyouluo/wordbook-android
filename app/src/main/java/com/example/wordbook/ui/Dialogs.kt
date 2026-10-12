@@ -53,6 +53,10 @@ import com.example.wordbook.data.Word
 import com.example.wordbook.util.SyncScheduler
 import com.example.wordbook.data.WebDavSync
 import com.example.wordbook.util.WordTextUtils
+import androidx.compose.material3.FilterChip
+import androidx.compose.material3.Slider
+import androidx.compose.runtime.mutableFloatStateOf
+import com.example.wordbook.util.TtsController
 
 /**
  * 今日复习（P1）：
@@ -728,6 +732,7 @@ fun BatchAddDialog(vm: WordBookViewModel, onClose: () -> Unit) {
  */
 @Composable
 fun SettingsDialog(vm: WordBookViewModel, onClose: () -> Unit) {
+    val context = androidx.compose.ui.platform.LocalContext.current
     var providerId by remember { mutableStateOf(vm.currentProviderId()) }
     var showPicker by remember { mutableStateOf(false) }
     var showSync by remember { mutableStateOf(false) }
@@ -856,6 +861,91 @@ fun SettingsDialog(vm: WordBookViewModel, onClose: () -> Unit) {
                     fontSize = 11.sp,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
+                // ---- P3：主题手动覆盖 ----
+                Text("主题", fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
+                Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                    listOf("system" to "跟随系统", "light" to "浅色", "dark" to "深色").forEach { (mode, label) ->
+                        FilterChip(
+                            selected = ThemePrefs.mode == mode,
+                            onClick = { ThemePrefs.set(context, mode) },
+                            label = { Text(label, fontSize = 12.sp) }
+                        )
+                    }
+                }
+
+                // ---- P3：TTS 音色与语速 ----
+                Text("发音（TTS）", fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
+                var voicePickerOpen by remember { mutableStateOf(false) }
+                var rate by remember { mutableFloatStateOf(TtsController.rate()) }
+                OutlinedButton(
+                    onClick = { voicePickerOpen = true },
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Text("音色：" + (TtsController.currentVoiceName() ?: "自动（Natural > Google > Premium > 本地）"))
+                }
+                if (voicePickerOpen) {
+                    AlertDialog(
+                        onDismissRequest = { voicePickerOpen = false },
+                        title = { Text("选择发音音色") },
+                        text = {
+                            Column(modifier = Modifier.verticalScroll(rememberScrollState()).heightIn(max = 380.dp)) {
+                                Row(
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .clickable { TtsController.setVoice(context, null); voicePickerOpen = false }
+                                        .padding(vertical = 4.dp)
+                                ) {
+                                    RadioButton(selected = false, onClick = { TtsController.setVoice(context, null); voicePickerOpen = false })
+                                    Text("自动挑选（推荐）", fontSize = 13.sp)
+                                }
+                                if (TtsController.voiceOptions().isEmpty()) {
+                                    Text("当前引擎没有可枚举的英文音色（可能未安装语音包）", fontSize = 12.sp)
+                                }
+                                TtsController.voiceOptions().forEach { (name, label) ->
+                                    Row(
+                                        verticalAlignment = Alignment.CenterVertically,
+                                        modifier = Modifier
+                                            .fillMaxWidth()
+                                            .clickable { TtsController.setVoice(context, name); voicePickerOpen = false }
+                                            .padding(vertical = 4.dp)
+                                    ) {
+                                        RadioButton(
+                                            selected = TtsController.currentVoiceName() == name,
+                                            onClick = { TtsController.setVoice(context, name); voicePickerOpen = false }
+                                        )
+                                        Text(label, fontSize = 12.sp)
+                                    }
+                                }
+                            }
+                        },
+                        confirmButton = { TextButton(onClick = { voicePickerOpen = false }) { Text("关闭") } }
+                    )
+                }
+                Text("语速：${"%.2f".format(rate)}x", fontSize = 12.sp)
+                Slider(
+                    value = rate,
+                    onValueChange = { rate = it },
+                    onValueChangeFinished = { TtsController.setRate(context, rate) },
+                    valueRange = TtsController.MIN_RATE..TtsController.MAX_RATE
+                )
+                TextButton(
+                    onClick = { TtsController.setRate(context, rate); TtsController.speakPreview() },
+                    enabled = TtsController.isReady()
+                ) { Text("试听（The quick brown fox…）") }
+
+                // ---- P3：会话单条消息收词上限 ----
+                Text("AI 会话单条上限", fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
+                Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                    WordBookViewModel.CHAT_MAX_WORDS_OPTIONS.forEach { n ->
+                        FilterChip(
+                            selected = vm.chatMaxWords() == n,
+                            onClick = { vm.setChatMaxWords(n) },
+                            label = { Text("$n 个", fontSize = 12.sp) }
+                        )
+                    }
+                }
+
                 // 复习偏好（P1）：先回忆再判定
                 var recallFirst by remember { mutableStateOf(vm.reviewRecallFirst()) }
                 Row(verticalAlignment = Alignment.CenterVertically) {

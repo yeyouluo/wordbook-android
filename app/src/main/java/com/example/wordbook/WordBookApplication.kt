@@ -14,6 +14,8 @@ class WordBookApplication : Application() {
 
     override fun onCreate() {
         super.onCreate()
+        // 载入主题覆盖设置（system/light/dark）
+        com.example.wordbook.ui.ThemePrefs.load(this)
         // 注册每日备份与每日通知（KEEP：已注册则不重复排期）
         DailyJobs.schedule(this)
         // 按设置里的间隔注册定时云同步（间隔 0 或关闭时取消任务）

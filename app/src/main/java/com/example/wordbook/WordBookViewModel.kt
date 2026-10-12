@@ -214,6 +214,17 @@ class WordBookViewModel(app: Application) : AndroidViewModel(app) {
         }
     }
 
+    /** 会话单条消息收词上限（P3 可调：20/40/60/80） */
+    fun chatMaxWords(): Int {
+        val saved = prefs.getInt(K_CHAT_MAX_WORDS, CHAT_MAX_WORDS)
+        return if (saved in CHAT_MAX_WORDS_OPTIONS) saved else CHAT_MAX_WORDS
+    }
+
+    fun setChatMaxWords(value: Int) {
+        val safe = if (value in CHAT_MAX_WORDS_OPTIONS) value else CHAT_MAX_WORDS
+        prefs.edit().putInt(K_CHAT_MAX_WORDS, safe).apply()
+    }
+
     /** 复习偏好：先回忆再判定（默认开，与随机抽测共用） */
     fun reviewRecallFirst(): Boolean = prefs.getBoolean(K_RECALL_FIRST, true)
 
@@ -498,14 +509,15 @@ class WordBookViewModel(app: Application) : AndroidViewModel(app) {
         viewModelScope.launch {
             val client = newClient()
             var history = trimmedHistory()
-            var outcome = client.converseOutcome(history)
+            val maxWords = chatMaxWords()
+            var outcome = client.converseOutcome(history, maxWords)
             var note = ""
 
             // 失败但上下文不止一条时：自动精简到「只发这一步」重试一次
             // （用户之前只能靠"清空会话"绕过，这里替他自动做掉）
             if (!outcome.ok && history.size > 1) {
                 history = listOf(history.last())
-                outcome = client.converseOutcome(history)
+                outcome = client.converseOutcome(history, maxWords)
                 if (outcome.ok) note = "\n\n（上一轮上下文过长导致失败，已自动精简后重试成功）"
             }
 
@@ -532,10 +544,10 @@ class WordBookViewModel(app: Application) : AndroidViewModel(app) {
             val envelope = outcome.value!!
             chatSending.value = false
             val drafts = client.toDrafts(envelope)
-            if (drafts.size > CHAT_MAX_WORDS) {
+            if (drafts.size > maxWords) {
                 chat.value = chat.value + ChatUiMessage(
                     role = "assistant",
-                    text = "这条消息里识别到 ${drafts.size} 个单词，超过单次上限 ${CHAT_MAX_WORDS} 个。" +
+                    text = "这条消息里识别到 ${drafts.size} 个单词，超过单次上限 ${maxWords} 个。" +
                         "建议改用顶栏「批量 AI 查词」，那边有进度和失败重试。",
                     error = false
                 )
@@ -817,8 +829,13 @@ class WordBookViewModel(app: Application) : AndroidViewModel(app) {
         /** 词与词之间的间隔：单并发顺序跑，避免触发限流 */
         private const val WORD_GAP_MS = 250L
 
-        /** 会话窗口单条消息最多接受多少词（超出建议改用批量入口） */
+        /** 会话窗口单条消息最多接受多少词（默认值；P3 起可在设置页调整） */
         const val CHAT_MAX_WORDS = 20
+
+        /** 可选上限 */
+        val CHAT_MAX_WORDS_OPTIONS = listOf(20, 40, 60, 80)
+
+        private const val K_CHAT_MAX_WORDS = "chat_max_words"
 
         /** 当前选中的 AI 厂商 */
         private const val K_PROVIDER = "ai_provider_id"
