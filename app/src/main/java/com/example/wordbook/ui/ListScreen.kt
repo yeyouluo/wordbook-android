@@ -101,6 +101,7 @@ fun WordBookApp(
     var clipboardHint by remember { mutableStateOf<String?>(null) }
     var showBatch by remember { mutableStateOf(false) }
     var showChat by remember { mutableStateOf(false) }
+    var showStatsDetail by remember { mutableStateOf(false) }
     val batchState by vm.batch.collectAsState()
 
     var showReview by remember { mutableStateOf(false) }
@@ -346,7 +347,8 @@ fun WordBookApp(
                     StatsBanner(
                         stats = stats,
                         onReview = { showReview = true },
-                        onQuiz = { showQuiz = Word(id = -1, spelling = "") }
+                        onQuiz = { showQuiz = Word(id = -1, spelling = "") },
+                        onShowStats = { showStatsDetail = true }
                     )
                     // 批量任务进行中：给一个回到进度页的入口（弹窗关掉后也能找回）
                     if (batchState.running) {
@@ -401,6 +403,9 @@ fun WordBookApp(
     if (showReview) {
         ReviewDialog(vm = vm, onSpeak = onSpeak, onClose = { showReview = false })
     }
+    if (showStatsDetail) {
+        StatsDetailDialog(stats = stats, onClose = { showStatsDetail = false })
+    }
     if (showQuiz != null) {
         QuizDialog(vm = vm, onSpeak = onSpeak, onClose = { showQuiz = null })
     }
@@ -446,7 +451,12 @@ fun WordBookApp(
 }
 
 @Composable
-fun StatsBanner(stats: Stats, onReview: () -> Unit, onQuiz: () -> Unit) {
+fun StatsBanner(
+    stats: Stats,
+    onReview: () -> Unit,
+    onQuiz: () -> Unit,
+    onShowStats: () -> Unit
+) {
     if (stats.total == 0) return
     Card(modifier = Modifier.fillMaxWidth()) {
         Column(modifier = Modifier.padding(12.dp)) {
@@ -465,10 +475,13 @@ fun StatsBanner(stats: Stats, onReview: () -> Unit, onQuiz: () -> Unit) {
             if (stats.accuracyPercent >= 0) {
                 Text(
                     "📈 正确率 ${stats.accuracyPercent}%（对 ${stats.totalCorrect} · 错 ${stats.totalWrong}）" +
-                        " · 🔥 连续 ${stats.streakDays} 天 · 本周 ${stats.weekReviewDays} 天",
+                        " · 🔥 连续 ${stats.streakDays} 天 · 本周 ${stats.weekReviewDays} 天" +
+                        "\n（点这里看战绩明细）",
                     fontSize = 12.sp,
                     color = MaterialTheme.colorScheme.primary,
-                    modifier = Modifier.padding(top = 2.dp)
+                    modifier = Modifier
+                        .padding(top = 2.dp)
+                        .clickable { onShowStats() }
                 )
             } else {
                 Text(

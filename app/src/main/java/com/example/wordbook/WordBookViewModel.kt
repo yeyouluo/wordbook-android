@@ -43,7 +43,11 @@ data class Stats(
     /** 本周有复习的天数 */
     val weekReviewDays: Int = 0,
     /** 历史复习总次数（用于区分"从没复习过"和"v1.6 前的老记录"） */
-    val totalReviews: Int = 0
+    val totalReviews: Int = 0,
+    /** 最近一次复习时间（词库 max(lastReviewedAt)） */
+    val lastReviewedAtMax: Long = 0,
+    /** 今天是否已复习（连击文案分支用） */
+    val reviewedToday: Boolean = false
 )
 
 data class ImportResult(val added: Int, val skipped: Int)
@@ -151,7 +155,10 @@ class WordBookViewModel(app: Application) : AndroidViewModel(app) {
             totalWrong = wrong,
             streakDays = ReviewStats.streakDays(reviewDays),
             weekReviewDays = ReviewStats.weekReviewDays(reviewDays),
-            totalReviews = list.sumOf { it.reviewCount }
+            totalReviews = list.sumOf { it.reviewCount },
+            lastReviewedAtMax = list.maxOfOrNull { it.lastReviewedAt } ?: 0L,
+            reviewedToday = ReviewStats.streakDays(reviewDays) > 0 &&
+                ReviewStats.isToday(reviewDays)
         )
     }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), Stats())
 
@@ -179,6 +186,13 @@ class WordBookViewModel(app: Application) : AndroidViewModel(app) {
                 )
             )
         }
+    }
+
+    /** 复习偏好：先回忆再判定（默认开，与随机抽测共用） */
+    fun reviewRecallFirst(): Boolean = prefs.getBoolean(K_RECALL_FIRST, true)
+
+    fun setReviewRecallFirst(value: Boolean) {
+        prefs.edit().putBoolean(K_RECALL_FIRST, value).apply()
     }
 
     // ---------- AI 服务配置（多厂商，均走 OpenAI 兼容协议） ----------
@@ -771,6 +785,9 @@ class WordBookViewModel(app: Application) : AndroidViewModel(app) {
 
         /** 有复习行为的日期集合（连击/本周统计用） */
         private const val K_REVIEW_DAYS = "review_days"
+
+        /** 复习偏好：先回忆再判定 */
+        private const val K_RECALL_FIRST = "review_recall_first"
 
         /** 会话上下文裁剪：最多带几条历史、总字数上限（防上下文过长导致整轮失败） */
         private const val CHAT_HISTORY_MAX_MESSAGES = 8

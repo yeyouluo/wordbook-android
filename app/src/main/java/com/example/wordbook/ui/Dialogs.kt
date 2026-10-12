@@ -35,6 +35,8 @@ import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateListOf
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
@@ -44,6 +46,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.example.wordbook.Stats
 import com.example.wordbook.WordBookViewModel
 import com.example.wordbook.data.AiProviders
 import com.example.wordbook.data.Word
@@ -51,65 +54,183 @@ import com.example.wordbook.util.SyncScheduler
 import com.example.wordbook.data.WebDavSync
 import com.example.wordbook.util.WordTextUtils
 
-/** 今日复习：艾宾浩斯到期列表；每词：🔊发音 + ✓记住了 + ✕没记住 */
+/**
+ * 今日复习（P1）：
+ * - 「先回忆后判定」：默认只显示 单词+音标+🔊，点「显示释义」后才显示 释义/记忆法/同根词，
+ *   未显示释义时 ✓/✗ 不可点（设置里可关掉这个行为）
+ * - 分页：每页 10 个，上一页/下一页 + 「第 x / y 页（本页 n 个）」；答过的词立即移出，下一页自动顶替
+ */
 @Composable
 fun ReviewDialog(vm: WordBookViewModel, onSpeak: (String) -> Unit, onClose: () -> Unit) {
     val stats by vm.stats.collectAsState()
+    val recallFirst = remember { vm.reviewRecallFirst() }
+    val pageSize = 10
+    var page by remember { mutableIntStateOf(0) }
+    // wordId -> 是否已展开释义（答过的词会被移出列表，这里的记录随词条消失）
+    val revealed = remember { mutableStateMapOf<Long, Boolean>() }
+
+    val due = stats.dueWords
+    val pageCount = if (due.isEmpty()) 1 else (due.size + pageSize - 1) / pageSize
+    val safePage = page.coerceIn(0, pageCount - 1)
+    val pageWords = due.drop(safePage * pageSize).take(pageSize)
+
     AlertDialog(
         onDismissRequest = onClose,
         title = { Text("今日复习（艾宾浩斯）") },
         text = {
-            if (stats.dueWords.isEmpty()) {
+            if (due.isEmpty()) {
                 Text("今天的复习计划已完成 🎉\n\n该复习的词：加入后第 1、2、4、7、15、30 天各复习一次")
             } else {
-                Column(
-                    verticalArrangement = Arrangement.spacedBy(6.dp),
-                    modifier = Modifier
-                        .verticalScroll(rememberScrollState())
-                        .heightIn(max = 380.dp)
-                ) {
-                    stats.dueWords.forEach { word ->
-                        Card {
-                            Row(
-                                verticalAlignment = Alignment.CenterVertically,
-                                modifier = Modifier.fillMaxWidth().padding(horizontal = 10.dp)
-                            ) {
-                                Column(modifier = Modifier.weight(1f)) {
-                                    Text(word.spelling, fontWeight = FontWeight.SemiBold)
-                                    Text(
-                                        "答对 ${word.reviewCorrectCount} 次",
-                                        fontSize = 11.sp,
-                                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                                    )
-                                }
-                                IconButton(onClick = { onSpeak(word.spelling) }) {
-                                    Icon(
-                                        Icons.Filled.VolumeUp,
-                                        contentDescription = "发音",
-                                        tint = SpeakBlue
-                                    )
-                                }
-                                IconButton(onClick = { vm.markReviewed(word, true) }) {
-                                    Icon(
-                                        Icons.Filled.Check,
-                                        contentDescription = "记住了",
-                                        tint = MaterialTheme.colorScheme.primary
-                                    )
-                                }
-                                IconButton(onClick = { vm.markReviewed(word, false) }) {
-                                    Icon(
-                                        Icons.Filled.Close,
-                                        contentDescription = "没记住",
-                                        tint = MaterialTheme.colorScheme.error
-                                    )
+                Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                    Text(
+                        "第 ${safePage + 1} / $pageCount 页（本页 ${pageWords.size} 个）",
+                        fontSize = 12.sp,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                    Column(
+                        verticalArrangement = Arrangement.spacedBy(6.dp),
+                        modifier = Modifier
+                            .verticalScroll(rememberScrollState())
+                            .heightIn(max = 380.dp)
+                    ) {
+                        pageWords.forEach { word ->
+                            val shown = !recallFirst || revealed[word.id] == true
+                            Card {
+                                Column(modifier = Modifier.fillMaxWidth().padding(10.dp)) {
+                                    Row(verticalAlignment = Alignment.CenterVertically) {
+                                        Text(word.spelling, fontWeight = FontWeight.SemiBold)
+                                        if (word.phonetic.isNotBlank()) {
+                                            Text(
+                                                "  ${word.phonetic}",
+                                                fontSize = 12.sp,
+                                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                                            )
+                                        }
+                                        IconButton(onClick = { onSpeak(word.spelling) }) {
+                                            Icon(
+                                                Icons.Filled.VolumeUp,
+                                                contentDescription = "发音",
+                                                tint = SpeakBlue
+                                            )
+                                        }
+                                        Spacer(Modifier.weight(1f))
+                                        IconButton(
+                                            onClick = { vm.markReviewed(word, true) },
+                                            enabled = shown
+                                        ) {
+                                            Icon(
+                                                Icons.Filled.Check,
+                                                contentDescription = "记住了",
+                                                tint = if (shown) MaterialTheme.colorScheme.primary
+                                                else MaterialTheme.colorScheme.onSurfaceVariant
+                                            )
+                                        }
+                                        IconButton(
+                                            onClick = { vm.markReviewed(word, false) },
+                                            enabled = shown
+                                        ) {
+                                            Icon(
+                                                Icons.Filled.Close,
+                                                contentDescription = "没记住",
+                                                tint = if (shown) MaterialTheme.colorScheme.error
+                                                else MaterialTheme.colorScheme.onSurfaceVariant
+                                            )
+                                        }
+                                    }
+                                    if (!shown) {
+                                        TextButton(onClick = { revealed[word.id] = true }) {
+                                            Text("显示释义", fontSize = 12.sp)
+                                        }
+                                    } else {
+                                        if (word.meaning.isNotBlank()) {
+                                            Text(word.meaning, fontSize = 13.sp)
+                                        }
+                                        if (word.mnemonic.isNotBlank()) {
+                                            Text(
+                                                "💡 ${word.mnemonic}",
+                                                fontSize = 12.sp,
+                                                color = MaterialTheme.colorScheme.primary
+                                            )
+                                        }
+                                        if (word.family.isNotBlank()) {
+                                            Text(
+                                                "🔗 ${word.family}",
+                                                fontSize = 11.sp,
+                                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                                            )
+                                        }
+                                        Text(
+                                            "答对 ${word.reviewCorrectCount} 次",
+                                            fontSize = 11.sp,
+                                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                                        )
+                                    }
                                 }
                             }
                         }
+                    }
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        TextButton(
+                            onClick = { page = (safePage - 1).coerceAtLeast(0) },
+                            enabled = safePage > 0
+                        ) { Text("上一页") }
+                        TextButton(
+                            onClick = { page = (safePage + 1).coerceAtMost(pageCount - 1) },
+                            enabled = safePage < pageCount - 1
+                        ) { Text("下一页") }
                     }
                 }
             }
         },
         confirmButton = { TextButton(onClick = onClose) { Text("完成") } }
+    )
+}
+
+/**
+ * 复习战绩明细（P1）：点统计卡的正确率区打开。
+ * 五项数据与统计卡片同源（都来自 vm.stats），口径写清楚避免误读。
+ */
+@Composable
+fun StatsDetailDialog(stats: Stats, onClose: () -> Unit) {
+    val fmt = remember { java.text.SimpleDateFormat("yyyy-MM-dd HH:mm", java.util.Locale.US) }
+    AlertDialog(
+        onDismissRequest = onClose,
+        title = { Text("复习战绩明细") },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                if (stats.accuracyPercent >= 0) {
+                    Text(
+                        "累计正确率：${stats.accuracyPercent}%（对 ${stats.totalCorrect} · 错 ${stats.totalWrong}）",
+                        fontSize = 14.sp
+                    )
+                } else {
+                    Text("累计正确率：暂无数据（还没点过 ✓/✗）", fontSize = 14.sp)
+                }
+                Text("复习总次数：${stats.totalReviews}", fontSize = 13.sp)
+                Text(
+                    "连续复习天数：${stats.streakDays} 天 · " +
+                        if (stats.streakDays == 0) "今天还没开始复习"
+                        else if (stats.reviewedToday) "今天已复习，连击继续"
+                        else "今天还没复习，连击暂从昨天算起",
+                    fontSize = 13.sp
+                )
+                Text("本周复习天数：${stats.weekReviewDays} 天（周一起算）", fontSize = 13.sp)
+                Text(
+                    "最近一次复习：" +
+                        if (stats.lastReviewedAtMax > 0) fmt.format(java.util.Date(stats.lastReviewedAtMax))
+                        else "从未复习",
+                    fontSize = 13.sp
+                )
+                Text(
+                    "口径：正确率 = 累计答对 ÷（累计答对 + 累计答错），答错不会抹掉历史；" +
+                        "连续天数在有复习行为的日子上连续累计，某天完全没复习才会中断；" +
+                        "本周天数按周一起算、最多 7 天。",
+                    fontSize = 11.sp,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+        },
+        confirmButton = { TextButton(onClick = onClose) { Text("关闭") } }
     )
 }
 
@@ -735,6 +856,19 @@ fun SettingsDialog(vm: WordBookViewModel, onClose: () -> Unit) {
                     fontSize = 11.sp,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
+                // 复习偏好（P1）：先回忆再判定
+                var recallFirst by remember { mutableStateOf(vm.reviewRecallFirst()) }
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Checkbox(
+                        checked = recallFirst,
+                        onCheckedChange = {
+                            recallFirst = it
+                            vm.setReviewRecallFirst(it)
+                        }
+                    )
+                    Text("复习先回忆再判定（默认开）", fontSize = 12.sp)
+                }
+
                 // 云同步入口（问题 #7）
                 OutlinedButton(
                     onClick = { showSync = true },

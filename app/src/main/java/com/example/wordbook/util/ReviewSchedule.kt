@@ -83,4 +83,7 @@ object ReviewStats {
         if (total <= 0) return -1
         return Math.round(correct * 100f / total)
     }
+
+    /** 今天是否已有复习行为（连击文案的分支依据） */
+    fun isToday(days: Set<String>): Boolean = LocalDate.now().format(DATE_FMT) in days
 }
