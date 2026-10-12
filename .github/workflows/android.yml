@@ -49,9 +49,10 @@ jobs:
           path: dist/*.apk
           if-no-files-found: warn
 
-      # 把 debug 包挂到对应的 GitHub Release 上（用仓库自带的 GITHUB_TOKEN，
-      # 不需要在本地配置任何凭据）。只上传 *-debug.apk，避免覆盖正式包。
-      - name: Attach debug APK to release
+      # 用仓库自带的 GITHUB_TOKEN（本地不需要任何凭据）：
+      # 1) 该版本还没有 Release 就先创建一个（notes 指向 CHANGELOG）
+      # 2) 把 debug 包挂上去（只传 *-debug.apk，绝不覆盖本地签名的正式包）
+      - name: Ensure release and attach debug APK
         if: github.event_name == 'push' && github.ref == 'refs/heads/main'
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -59,9 +60,13 @@ jobs:
           VERSION=$(grep -oP 'versionName\s*=\s*"\K[^"]+' app/build.gradle.kts)
           TAG="v${VERSION}"
           echo "app version: $VERSION → tag: $TAG"
-          if gh release view "$TAG" >/dev/null 2>&1; then
-            gh release upload "$TAG" dist/*-debug.apk --clobber
-            echo "已把 debug 包挂到 $TAG"
-          else
-            echo "release $TAG 尚不存在，跳过（正式包仍由本地签名产出）"
+          if ! gh release view "$TAG" >/dev/null 2>&1; then
+            gh release create "$TAG" \
+              --title "WordBook ${TAG}" \
+              --notes "变更见 [CHANGELOG.md](https://github.com/${GITHUB_REPOSITORY}/blob/main/CHANGELOG.md)。
+
+  正式包（已签名、体积更小）由本地签名后上传；本 Release 的 debug 包可直接安装使用。" || true
+            echo "已创建 Release $TAG"
           fi
+          gh release upload "$TAG" dist/*-debug.apk --clobber || true
+          echo "已挂载 debug 包到 $TAG"
