@@ -433,7 +433,6 @@ fun WordBookApp(
                                 )
                                 editingId = null
                             },
-                            onEdit = { editingWord = word },
                             onDelete = {
                                 vm.deleteWord(word)
                                 offerUndo("已删除「${word.spelling}」") { vm.restoreWord(word) }
