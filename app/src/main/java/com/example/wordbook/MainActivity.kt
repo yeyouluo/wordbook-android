@@ -7,6 +7,7 @@ import android.speech.tts.TextToSpeech
 import android.widget.Toast
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
+import androidx.activity.viewModels
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.MaterialTheme
@@ -28,6 +29,9 @@ import java.util.Locale
  */
 class MainActivity : ComponentActivity() {
 
+    /** Activity 持有 VM：离开 App 时要触发「自动云同步」 */
+    private val vm: WordBookViewModel by viewModels()
+
     private var tts: TextToSpeech? = null
     private var ttsReady = false
     private var pendingSpeak: String? = null
@@ -45,6 +49,7 @@ class MainActivity : ComponentActivity() {
             Surface(modifier = Modifier.fillMaxSize()) {
                 MaterialTheme(colorScheme = appColorScheme()) {
                     WordBookApp(
+                        vm = vm,
                         onSpeak = { spelling -> speak(spelling) },
                         pendingWord = pendingWord,
                         pendingAdd = pendingAdd,
@@ -180,10 +185,18 @@ class MainActivity : ComponentActivity() {
         }
     }
 
+    override fun onResume() {
+        super.onResume()
+        // 回到前台时刷新小组件，保证看到的待复习数是最新的
+        WordBookWidgetProvider.refresh(this)
+    }
+
     override fun onStop() {
         super.onStop()
         // 离开 APP 时刷新桌面小组件（复习/加词后的计数立刻跟上）
         WordBookWidgetProvider.refresh(this)
+        // 开了「离开时自动同步」就静默上传一次
+        vm.webdavAutoSyncIfEnabled()
     }
 
     override fun onDestroy() {

@@ -8,7 +8,7 @@
 [![Platform](https://img.shields.io/badge/Platform-Android%208.0%2B-3DDC84.svg?logo=android&logoColor=white)](https://developer.android.com)
 [![Kotlin](https://img.shields.io/badge/Kotlin-2.0.20-7F52FF.svg?logo=kotlin&logoColor=white)](https://kotlinlang.org)
 [![Compose](https://img.shields.io/badge/Jetpack%20Compose-BOM%202024.09-4285F4.svg?logo=jetpackcompose&logoColor=white)](https://developer.android.com/jetpack/compose)
-[![Release](https://img.shields.io/badge/Release-v0.1-success.svg)](../../releases)
+[![Release](https://img.shields.io/badge/Release-v0.2-success.svg)](../../releases)
 [![CI](https://github.com/yeyouluo/wordbook-android/actions/workflows/android.yml/badge.svg)](../../actions/workflows/android.yml)
 
 [功能](#-功能) · [快速开始](#-快速开始) · [AI 配置](#-ai-配置支持多厂商) · [工作原理](#-它是怎么工作的) · [项目结构](#-项目结构) · [Roadmap](#-roadmap) · [使用手册](使用手册.md) · [贡献](CONTRIBUTING.md)
@@ -93,14 +93,14 @@
 
 ### 方式一：直接装 APK（推荐给只想用的人）
 
-1. 到 [Releases](../../releases)（或自己构建，见下）下载 `WordBook-v0.1-release.apk`；
+1. 到 [Releases](../../releases)（或自己构建，见下）下载 `WordBook-v0.2-release.apk`；
 2. 传到手机安装（首次需允许"未知来源应用"）；
 3. 打开 App → 右上角 ⚙️ → 选 AI 厂商并填自己的 API Key（见下一节）。
 
 | 包 | 体积 | 用途 |
 |---|---|---|
-| `WordBook-v0.1-release.apk` | ~11 MB | 日常使用 |
-| `WordBook-v0.1-debug.apk` | ~17 MB | 需要看日志/调试时 |
+| `WordBook-v0.2-release.apk` | ~11 MB | 日常使用 |
+| `WordBook-v0.2-debug.apk` | ~17 MB | 需要看日志/调试时 |
 
 两者**同签名**，可以互相覆盖安装且不丢数据。
 
@@ -118,8 +118,8 @@ cd wordbook-android
 构建完成后，带项目名的产物会自动复制到 `dist/`：
 
 ```
-dist/WordBook-v0.1-debug.apk
-dist/WordBook-v0.1-release.apk
+dist/WordBook-v0.2-debug.apk
+dist/WordBook-v0.2-release.apk
 ```
 
 **环境要求**：JDK 17+、Android SDK（compileSdk 34 / minSdk 26）。首次构建建议直接用 Android Studio 打开，它会自动装好 SDK。
@@ -249,7 +249,8 @@ app/src/main/java/com/example/wordbook/
 - [ ] 复习曲线可视化与导出
 - [ ] 单词分组 / 标签
 - [ ] 单元测试（`ReviewSchedule`、`CsvUtil`、`WordTextUtils` 三处纯函数最值得覆盖）
-- [ ] 多设备同步（WebDAV / 本地局域网）
+- [x] **WebDAV 云同步**（0.2 起支持：坚果云 / Nextcloud / 群晖，按 updatedAt 合并）
+- [ ] 局域网直连同步（免网盘）
 
 ## ⚠️ 已知限制
 

@@ -13,10 +13,12 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.CloudSync
 import androidx.compose.material.icons.filled.VolumeUp
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
+import androidx.compose.material3.Checkbox
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -205,7 +207,13 @@ fun QuizDialog(vm: WordBookViewModel, onSpeak: (String) -> Unit, onClose: () -> 
 
 /** 单词详情：全字段 + 点例句朗读 + 与 AI 多轮问答 */
 @Composable
-fun WordDetailDialog(vm: WordBookViewModel, word: Word, onSpeak: (String) -> Unit, onClose: () -> Unit) {
+fun WordDetailDialog(
+    vm: WordBookViewModel,
+    word: Word,
+    onSpeak: (String) -> Unit,
+    onEdit: () -> Unit,
+    onClose: () -> Unit
+) {
     val msgs = remember(word.id) { mutableStateListOf<Pair<String, String>>() }
     var input by remember { mutableStateOf("") }
     var busy by remember { mutableStateOf(false) }
@@ -298,25 +306,49 @@ fun WordDetailDialog(vm: WordBookViewModel, word: Word, onSpeak: (String) -> Uni
                 }
             }
         },
-        confirmButton = { TextButton(onClick = onClose) { Text("关闭") } }
+        confirmButton = {
+            Row {
+                // 编辑已有单词（问题 #4）
+                TextButton(onClick = onEdit) { Text("编辑") }
+                TextButton(onClick = onClose) { Text("关闭") }
+            }
+        }
     )
 }
 
-/** 添加单词（支持分享/剪贴板/快捷方式预填）；AI 查词一键填全 */
+/**
+ * 添加 / **编辑** 单词（问题 #4）。
+ * 传 editing 时进入编辑模式：字段预填原值，保存走 updateWord（保留 id、复习统计与创建时间）。
+ * 支持分享/剪贴板/快捷方式预填；AI 查词一键填全。
+ */
 @Composable
-fun AddWordDialog(vm: WordBookViewModel, prefill: String = "", onClose: () -> Unit) {
-    var spelling by remember { mutableStateOf(prefill) }
-    var phonetic by remember { mutableStateOf("") }
-    var meaning by remember { mutableStateOf("") }
-    var example by remember { mutableStateOf("") }
-    var mnemonic by remember { mutableStateOf("") }
-    var family by remember { mutableStateOf("") }
+fun AddWordDialog(
+    vm: WordBookViewModel,
+    prefill: String = "",
+    editing: Word? = null,
+    onClose: () -> Unit
+) {
+    val isEdit = editing != null
+    var spelling by remember { mutableStateOf(editing?.spelling ?: prefill) }
+    var phonetic by remember { mutableStateOf(editing?.phonetic ?: "") }
+    var meaning by remember { mutableStateOf(editing?.meaning ?: "") }
+    var example by remember { mutableStateOf(editing?.example ?: "") }
+    var mnemonic by remember { mutableStateOf(editing?.mnemonic ?: "") }
+    var family by remember { mutableStateOf(editing?.family ?: "") }
     var aiBusy by remember { mutableStateOf(false) }
-    var aiError by remember { mutableStateOf(false) }
+    var aiError by remember { mutableStateOf<String?>(null) }
 
     AlertDialog(
         onDismissRequest = onClose,
-        title = { Text(if (prefill.isBlank()) "添加单词" else "把「$prefill」存进词库") },
+        title = {
+            Text(
+                when {
+                    isEdit -> "编辑「${editing!!.spelling}」"
+                    prefill.isBlank() -> "添加单词"
+                    else -> "把「$prefill」存进词库"
+                }
+            )
+        },
         text = {
             Column(
                 verticalArrangement = Arrangement.spacedBy(8.dp),
@@ -333,8 +365,9 @@ fun AddWordDialog(vm: WordBookViewModel, prefill: String = "", onClose: () -> Un
                     Button(
                         onClick = {
                             aiBusy = true
-                            aiError = false
-                            vm.aiLookup(spelling.trim()) { result ->
+                            aiError = null
+                            vm.aiLookupOutcome(spelling.trim()) { outcome ->
+                                val result = outcome.value
                                 if (result != null) {
                                     phonetic = result.phonetic
                                     meaning = result.meaning
@@ -342,7 +375,7 @@ fun AddWordDialog(vm: WordBookViewModel, prefill: String = "", onClose: () -> Un
                                     mnemonic = result.mnemonic
                                     family = WordTextUtils.familyText(result.family)
                                 } else {
-                                    aiError = true
+                                    aiError = outcome.error ?: "查询失败，稍后重试"
                                 }
                                 aiBusy = false
                             }
@@ -355,14 +388,9 @@ fun AddWordDialog(vm: WordBookViewModel, prefill: String = "", onClose: () -> Un
                             Text("🤖 AI 查词")
                         }
                     }
-                    if (aiError) {
-                        Text(
-                            "AI 查词失败（先在⚙️里填 API Key）",
-                            fontSize = 12.sp,
-                            color = MaterialTheme.colorScheme.error,
-                            modifier = Modifier.align(Alignment.CenterVertically)
-                        )
-                    }
+                }
+                aiError?.let { msg ->
+                    Text(msg, fontSize = 12.sp, color = MaterialTheme.colorScheme.error)
                 }
                 OutlinedTextField(
                     value = phonetic,
@@ -401,21 +429,34 @@ fun AddWordDialog(vm: WordBookViewModel, prefill: String = "", onClose: () -> Un
             TextButton(
                 onClick = {
                     if (spelling.isNotBlank()) {
-                        vm.addWord(
-                            Word(
-                                spelling = spelling.trim(),
-                                phonetic = phonetic.trim(),
-                                meaning = meaning.trim(),
-                                example = example.trim(),
-                                mnemonic = mnemonic.trim(),
-                                family = family.trim()
-                            )
+                        val edited = Word(
+                            spelling = spelling.trim(),
+                            phonetic = phonetic.trim(),
+                            meaning = meaning.trim(),
+                            example = example.trim(),
+                            mnemonic = mnemonic.trim(),
+                            family = family.trim()
                         )
+                        if (isEdit) {
+                            // 编辑：保留原记录的身份与学习数据
+                            vm.updateWord(
+                                editing!!.copy(
+                                    spelling = edited.spelling,
+                                    phonetic = edited.phonetic,
+                                    meaning = edited.meaning,
+                                    example = edited.example,
+                                    mnemonic = edited.mnemonic,
+                                    family = edited.family
+                                )
+                            )
+                        } else {
+                            vm.addWord(edited)
+                        }
                         onClose()
                     }
                 },
                 enabled = spelling.isNotBlank()
-            ) { Text("保存") }
+            ) { Text(if (isEdit) "保存修改" else "保存") }
         },
         dismissButton = {
             TextButton(onClick = onClose) { Text("取消") }
@@ -566,6 +607,7 @@ fun BatchAddDialog(vm: WordBookViewModel, onClose: () -> Unit) {
 fun SettingsDialog(vm: WordBookViewModel, onClose: () -> Unit) {
     var providerId by remember { mutableStateOf(vm.currentProviderId()) }
     var showPicker by remember { mutableStateOf(false) }
+    var showSync by remember { mutableStateOf(false) }
     var key by remember(providerId) { mutableStateOf(vm.apiKeyFor(providerId)) }
     var model by remember(providerId) { mutableStateOf(vm.modelFor(providerId)) }
     var baseUrl by remember(providerId) { mutableStateOf(vm.baseUrlFor(providerId)) }
@@ -691,8 +733,25 @@ fun SettingsDialog(vm: WordBookViewModel, onClose: () -> Unit) {
                     fontSize = 11.sp,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
+                // 云同步入口（问题 #7）
+                OutlinedButton(
+                    onClick = { showSync = true },
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Icon(
+                        Icons.Filled.CloudSync,
+                        contentDescription = null,
+                        modifier = Modifier.size(16.dp)
+                    )
+                    Text(
+                        "  云同步（WebDAV）" +
+                            if (vm.webdavConfigured()) "：已配置" else "：未配置"
+                    )
+                }
                 Text(
-                    "版本 v0.1（versionCode 8）",
+                    "版本 v0.2（versionCode 9）\n" +
+                        "桌面小组件：长按桌面空白处 → 小组件/小部件 → 找到「单词本」拖到桌面，" +
+                        "显示今日待复习数与掌握进度，点一下直接开始复习。",
                     fontSize = 11.sp,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
@@ -706,6 +765,127 @@ fun SettingsDialog(vm: WordBookViewModel, onClose: () -> Unit) {
         },
         dismissButton = {
             TextButton(onClick = onClose) { Text("取消") }
+        }
+    )
+
+    if (showSync) {
+        SyncDialog(vm = vm, onClose = { showSync = false })
+    }
+}
+
+/**
+ * WebDAV 云同步（问题 #7）：坚果云 / Nextcloud / 群晖等标准 WebDAV 都可用。
+ * 合并策略：按单词配对，谁的 updatedAt 新用谁；库中没有的直接新增。
+ */
+@Composable
+fun SyncDialog(vm: WordBookViewModel, onClose: () -> Unit) {
+    var url by remember { mutableStateOf(vm.webdavUrl()) }
+    var user by remember { mutableStateOf(vm.webdavUser()) }
+    var pass by remember { mutableStateOf(vm.webdavPassword()) }
+    var auto by remember { mutableStateOf(vm.webdavAutoSync()) }
+    val state by vm.sync.collectAsState()
+
+    AlertDialog(
+        onDismissRequest = onClose,
+        title = { Text("云同步（WebDAV）") },
+        text = {
+            Column(
+                verticalArrangement = Arrangement.spacedBy(8.dp),
+                modifier = Modifier.verticalScroll(rememberScrollState())
+            ) {
+                Text(
+                    "填一个指向「文件」的完整地址（文件夹要先在网盘里建好）：\n" +
+                        "坚果云示例：https://dav.jianguoyun.com/dav/wordbook/wordbook.json\n\n" +
+                        "⚠️ 坚果云必须用「应用密码」，不是登录密码；凭据只存在本机。",
+                    fontSize = 11.sp,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+                OutlinedTextField(
+                    value = url,
+                    onValueChange = { url = it },
+                    label = { Text("WebDAV 文件地址") },
+                    modifier = Modifier.fillMaxWidth(),
+                    singleLine = true
+                )
+                OutlinedTextField(
+                    value = user,
+                    onValueChange = { user = it },
+                    label = { Text("用户名（坚果云是邮箱）") },
+                    modifier = Modifier.fillMaxWidth(),
+                    singleLine = true
+                )
+                OutlinedTextField(
+                    value = pass,
+                    onValueChange = { pass = it },
+                    label = { Text("密码 / 应用密码") },
+                    modifier = Modifier.fillMaxWidth(),
+                    singleLine = true
+                )
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Checkbox(checked = auto, onCheckedChange = { auto = it })
+                    Text("离开 App 时自动上传一份", fontSize = 12.sp)
+                }
+                Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                    TextButton(
+                        onClick = {
+                            vm.saveWebdavConfig(url, user, pass, auto)
+                            vm.testWebdav()
+                        },
+                        enabled = !state.running
+                    ) { Text("测试连接") }
+                    TextButton(
+                        onClick = {
+                            vm.saveWebdavConfig(url, user, pass, auto)
+                            vm.syncNow()
+                        },
+                        enabled = !state.running
+                    ) { Text("智能同步") }
+                }
+                Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                    TextButton(
+                        onClick = {
+                            vm.saveWebdavConfig(url, user, pass, auto)
+                            vm.webdavUpload()
+                        },
+                        enabled = !state.running
+                    ) { Text("仅上传") }
+                    TextButton(
+                        onClick = {
+                            vm.saveWebdavConfig(url, user, pass, auto)
+                            vm.webdavDownload()
+                        },
+                        enabled = !state.running
+                    ) { Text("仅拉取合并") }
+                }
+                if (state.running) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        CircularProgressIndicator(modifier = Modifier.size(16.dp))
+                        Text("  ${state.message}", fontSize = 12.sp)
+                    }
+                } else if (state.message.isNotBlank()) {
+                    Text(
+                        state.message,
+                        fontSize = 12.sp,
+                        color = if (state.ok) MaterialTheme.colorScheme.primary
+                        else MaterialTheme.colorScheme.error
+                    )
+                }
+                Text(
+                    "「智能同步」= 先拉远端合并（谁新用谁）再上传合并结果；" +
+                        "两端都改过同一个词时，以最后修改时间为准。",
+                    fontSize = 11.sp,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+        },
+        confirmButton = {
+            TextButton(onClick = {
+                vm.saveWebdavConfig(url, user, pass, auto)
+                onClose()
+            }) { Text("保存") }
+        },
+        dismissButton = {
+            TextButton(onClick = onClose) { Text("关闭") }
         }
     )
 }

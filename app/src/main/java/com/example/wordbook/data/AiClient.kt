@@ -38,6 +38,11 @@ class AiClient(
     /** 同根词条目：w=单词，m=一句话中文释义（允许缺失） */
     data class FamilyItem(val w: String, val m: String)
 
+    /** AI 调用结果：要么拿到值，要么拿到「给用户看的失败原因」 */
+    data class AiOutcome<T>(val value: T? = null, val error: String? = null) {
+        val ok: Boolean get() = value != null
+    }
+
     /** 会话窗口返回的「待入库词条」 */
     data class DraftWord(
         val spelling: String,
@@ -138,9 +143,13 @@ class AiClient(
         .readTimeout(90, TimeUnit.SECONDS)
         .build()
 
-    /** 输入一个单词，让 AI 返回音标/释义/例句/记忆法/同根词 */
-    suspend fun lookup(spelling: String): LookupResult? = withContext(Dispatchers.IO) {
-        if (apiKey.isBlank() || !isConfigured()) return@withContext null
+    /** 输入一个单词，让 AI 返回音标/释义/例句/记忆法/同根词（失败返回 null，供表单用） */
+    suspend fun lookup(spelling: String): LookupResult? = lookupOutcome(spelling).value
+
+    /** 同上，但带失败原因（供需要提示用户的场景用） */
+    suspend fun lookupOutcome(spelling: String): AiOutcome<LookupResult> = withContext(Dispatchers.IO) {
+        if (apiKey.isBlank()) return@withContext AiOutcome(error = "还没有填 API Key")
+        if (!isConfigured()) return@withContext AiOutcome(error = "baseUrl 或模型名为空")
 
         val system = ChatMessage(
             role = "system",
@@ -151,17 +160,31 @@ class AiClient(
                 "形如{\"w\":\"单词\",\"m\":\"不超过10字的中文简短释义\"},按词频从高到低排序)。" +
                 "不要输出 JSON 以外的任何内容。"
         )
-        val content = callCompletions(listOf(system, ChatMessage(role = "user", content = spelling)), jsonOnly = true)
-            ?: return@withContext null
-        parseLookupJson(content)
+        val res = callCompletions(
+            listOf(system, ChatMessage(role = "user", content = spelling)),
+            jsonOnly = true,
+            maxTokens = 900
+        )
+        val content = res.value ?: return@withContext AiOutcome(error = res.error)
+        val parsed = parseLookupJson(content)
+        if (parsed == null) {
+            AiOutcome(error = "模型返回的内容不是有效 JSON，可直接重试或换个模型")
+        } else {
+            AiOutcome(value = parsed)
+        }
     }
 
     /**
      * 围绕某个单词的多轮问答（用法陷阱、辨析、词源等）——单词详情页使用，纯文字回复。
      * history 为 (role, content) 对，可包含之前的 user/assistant 消息。
      */
-    suspend fun chat(history: List<Pair<String, String>>): String? = withContext(Dispatchers.IO) {
-        if (apiKey.isBlank() || !isConfigured() || history.isEmpty()) return@withContext null
+    suspend fun chat(history: List<Pair<String, String>>): String? = chatOutcome(history).value
+
+    /** 同上，带失败原因 */
+    suspend fun chatOutcome(history: List<Pair<String, String>>): AiOutcome<String> = withContext(Dispatchers.IO) {
+        if (apiKey.isBlank()) return@withContext AiOutcome(error = "还没有填 API Key")
+        if (!isConfigured()) return@withContext AiOutcome(error = "baseUrl 或模型名为空")
+        if (history.isEmpty()) return@withContext AiOutcome(error = "没有可发送的内容")
         val messages = mutableListOf<ChatMessage>()
         messages += ChatMessage(
             role = "system",
@@ -169,7 +192,7 @@ class AiClient(
                 "重点讲用法、辨析、例句或记忆技巧。"
         )
         messages += history.map { ChatMessage(role = it.first, content = it.second) }
-        callCompletions(messages, jsonOnly = false)
+        callCompletions(messages, jsonOnly = false, maxTokens = 600)
     }
 
     /**
@@ -178,33 +201,42 @@ class AiClient(
      * - 用户只是提问 → words 为空数组
      * 意图识别交给模型（system prompt 里写明契约），APP 不再写规则判断。
      */
-    suspend fun converse(history: List<Pair<String, String>>): ChatEnvelope? = withContext(Dispatchers.IO) {
-        if (apiKey.isBlank() || !isConfigured() || history.isEmpty()) return@withContext null
-        val system = ChatMessage(
-            role = "system",
-            content = "你是单词本 APP 里的英语学习助手。你必须只返回一个 JSON 对象：" +
-                "{\"reply\":\"给用户看的简体中文回复（不超过 200 字，可含要点）\"," +
-                "\"words\":[{\"spelling\":\"单词\",\"phonetic\":\"音标\",\"meaning\":\"中文释义\"," +
-                "\"example\":\"一个地道例句\",\"mnemonic\":\"一句话记忆法\"," +
-                "\"family\":[{\"w\":\"同根词\",\"m\":\"不超过10字中文释义\"}]}]}。" +
-                "规则：只有当用户消息里包含需要加入词库的英文单词时才填 words，" +
-                "每个词字段尽量填全（family 3-6 个，按词频排序）；" +
-                "words 最多 20 个，超出时只取前 20 个并在 reply 里说明；" +
-                "用户只是提问、聊天、问用法时 words 必须是空数组 []。" +
-                "不要输出 JSON 以外的任何内容。"
-        )
-        val messages = mutableListOf(system)
-        messages += history.map { ChatMessage(role = it.first, content = it.second) }
-        val content = callCompletions(messages, jsonOnly = true) ?: return@withContext null
-        val start = content.indexOf('{')
-        val end = content.lastIndexOf('}')
-        if (start < 0 || end <= start) return@withContext null
-        try {
-            json.decodeFromString(ChatEnvelope.serializer(), content.substring(start, end + 1))
-        } catch (e: Exception) {
-            null
+    suspend fun converse(history: List<Pair<String, String>>): ChatEnvelope? = converseOutcome(history).value
+
+    /** 同上，带失败原因（会话窗口需要把原因显示出来） */
+    suspend fun converseOutcome(history: List<Pair<String, String>>): AiOutcome<ChatEnvelope> =
+        withContext(Dispatchers.IO) {
+            if (apiKey.isBlank()) return@withContext AiOutcome(error = "还没有填 API Key")
+            if (!isConfigured()) return@withContext AiOutcome(error = "baseUrl 或模型名为空")
+            if (history.isEmpty()) return@withContext AiOutcome(error = "没有可发送的内容")
+            val system = ChatMessage(
+                role = "system",
+                content = "你是单词本 APP 里的英语学习助手。你必须只返回一个 JSON 对象：" +
+                    "{\"reply\":\"给用户看的简体中文回复（不超过 200 字，可含要点）\"," +
+                    "\"words\":[{\"spelling\":\"单词\",\"phonetic\":\"音标\",\"meaning\":\"中文释义\"," +
+                    "\"example\":\"一个地道例句\",\"mnemonic\":\"一句话记忆法\"," +
+                    "\"family\":[{\"w\":\"同根词\",\"m\":\"不超过10字中文释义\"}]}]}。" +
+                    "规则：只有当用户消息里包含需要加入词库的英文单词时才填 words，" +
+                    "每个词字段尽量填全（family 3-6 个，按词频排序）；" +
+                    "words 最多 20 个，超出时只取前 20 个并在 reply 里说明；" +
+                    "用户只是提问、聊天、问用法时 words 必须是空数组 []。" +
+                    "不要输出 JSON 以外的任何内容。"
+            )
+            val messages = mutableListOf(system)
+            messages += history.map { ChatMessage(role = it.first, content = it.second) }
+            val res = callCompletions(messages, jsonOnly = true, maxTokens = 2048)
+            val content = res.value ?: return@withContext AiOutcome(error = res.error)
+            val start = content.indexOf('{')
+            val end = content.lastIndexOf('}')
+            if (start < 0 || end <= start) {
+                return@withContext AiOutcome(error = "模型没有按 JSON 格式回答（回复片段：${content.take(80)}）")
+            }
+            try {
+                AiOutcome(value = json.decodeFromString(ChatEnvelope.serializer(), content.substring(start, end + 1)))
+            } catch (e: Exception) {
+                AiOutcome(error = "模型返回的 JSON 不完整（多为输出被截断），可重试或缩短提问")
+            }
         }
-    }
 
     /** 设置页「测试连接」：返回 (是否成功, 给用户看的原因) */
     suspend fun testConnection(): Pair<Boolean, String> = withContext(Dispatchers.IO) {
@@ -225,8 +257,7 @@ class AiClient(
                 if (resp.isSuccessful) {
                     true to "连接成功（${provider.displayName} · $model）"
                 } else {
-                    val err = resp.body?.string()?.take(200) ?: ""
-                    false to "HTTP ${resp.code}：$err"
+                    false to describeHttpError(resp.code, resp.body?.string() ?: "")
                 }
             }
         } catch (e: Exception) {
@@ -247,16 +278,21 @@ class AiClient(
 
     private suspend fun callCompletions(
         messages: List<ChatMessage>,
-        jsonOnly: Boolean
-    ): String? = withContext(Dispatchers.IO) {
-        if (!isConfigured()) return@withContext null
+        jsonOnly: Boolean,
+        maxTokens: Int
+    ): AiOutcome<String> = withContext(Dispatchers.IO) {
+        if (!isConfigured()) return@withContext AiOutcome(error = "baseUrl 或模型名为空")
         val wantJson = jsonOnly && provider.supportsJsonMode
-        val first = doCall(messages, wantJson)
+        val first = doCall(messages, wantJson, maxTokens)
         // 厂商不支持 response_format 时会 400：去掉该参数再试一次
-        if (first == null && wantJson) doCall(messages, false) else first
+        if (first.value == null && wantJson) doCall(messages, false, maxTokens) else first
     }
 
-    private fun doCall(messages: List<ChatMessage>, withJsonMode: Boolean): String? {
+    private fun doCall(
+        messages: List<ChatMessage>,
+        withJsonMode: Boolean,
+        maxTokens: Int
+    ): AiOutcome<String> {
         return try {
             val body = json.encodeToString(
                 ChatRequest.serializer(),
@@ -264,17 +300,60 @@ class AiClient(
                     model = model,
                     messages = messages,
                     responseFormat = if (withJsonMode) ResponseFormat(type = "json_object") else null,
+                    maxTokens = maxTokens,
                     temperature = 0.6
                 )
             )
             client.newCall(buildRequest(body)).execute().use { resp ->
-                if (!resp.isSuccessful) return null
-                val text = resp.body?.string() ?: return null
-                val chatResp = json.decodeFromString(ChatResponse.serializer(), text)
-                chatResp.choices.firstOrNull()?.message?.content
+                val text = resp.body?.string() ?: ""
+                if (!resp.isSuccessful) {
+                    return AiOutcome(error = describeHttpError(resp.code, text))
+                }
+                val content = try {
+                    json.decodeFromString(ChatResponse.serializer(), text)
+                        .choices.firstOrNull()?.message?.content
+                } catch (e: Exception) {
+                    null
+                }
+                if (content.isNullOrBlank()) AiOutcome(error = "模型返回了空内容（HTTP ${resp.code}）")
+                else AiOutcome(value = content)
+            }
+        } catch (e: Exception) {
+            val reason = e.message ?: e.javaClass.simpleName
+            AiOutcome(error = "网络请求失败：$reason")
+        }
+    }
+
+    /** 把厂商的报错翻译成用户能看懂的一句（尽量抽出 error.message） */
+    private fun describeHttpError(code: Int, body: String): String {
+        val snippet = body.take(300).replace("\n", " ")
+        val apiMessage = try {
+            val node = json.parseToJsonElement(body)
+            val obj = node as? kotlinx.serialization.json.JsonObject
+            val err = obj?.get("error")
+            when (err) {
+                is kotlinx.serialization.json.JsonObject ->
+                    (err["message"] as? kotlinx.serialization.json.JsonPrimitive)?.content
+                is kotlinx.serialization.json.JsonPrimitive -> err.content
+                else -> obj?.get("message")?.let { (it as? kotlinx.serialization.json.JsonPrimitive)?.content }
             }
         } catch (e: Exception) {
             null
+        }
+        val hint = when {
+            code == 401 -> "API Key 无效或已过期"
+            code == 402 -> "账户余额不足"
+            code == 403 -> "该 Key 无权访问此模型"
+            code == 404 -> "模型名或 baseUrl 不对（404）"
+            code == 429 -> "触发限流，稍后再试"
+            code in 500..599 -> "厂商服务端异常（$code）"
+            else -> null
+        }
+        val detail = apiMessage?.take(200) ?: snippet
+        return buildString {
+            append("HTTP $code")
+            if (hint != null) append("（$hint）")
+            if (detail.isNotBlank()) append("：$detail")
         }
     }
 

@@ -5,7 +5,7 @@
     android:initialLayout="@layout/widget_wordbook"
     android:minHeight="70dp"
     android:minWidth="180dp"
-    android:previewImage="@mipmap/ic_launcher"
+    android:previewImage="@drawable/widget_background"
     android:previewLayout="@layout/widget_wordbook"
     android:resizeMode="horizontal|vertical"
     android:targetCellHeight="2"
