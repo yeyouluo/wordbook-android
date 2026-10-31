@@ -247,7 +247,13 @@ fun StatsDetailDialog(stats: Stats, onClose: () -> Unit) {
 
 /** 随机抽测：盖释义 + 记住了/没记住，结果写入艾宾浩斯调度 */
 @Composable
-fun QuizDialog(vm: WordBookViewModel, onSpeak: (String) -> Unit, onClose: () -> Unit) {
+fun QuizDialog(
+    vm: WordBookViewModel,
+    onSpeak: (String) -> Unit,
+    onClose: () -> Unit,
+    // 出题时自动连读两遍（默认退化成单遍，保证既有调用点不受影响）
+    onSpeakTwice: (String) -> Unit = onSpeak
+) {
     var current by remember { mutableStateOf<Word?>(null) }
     var revealed by remember { mutableStateOf(false) }
     var finished by remember { mutableStateOf(false) }
@@ -263,6 +269,10 @@ fun QuizDialog(vm: WordBookViewModel, onSpeak: (String) -> Unit, onClose: () -> 
                 seen.add(next.id)
                 seenCount++
                 current = next
+                // 出题的同时自动连读两遍：抽测不看释义，先把发音灌进耳朵，
+                // 听到 → 想起释义，比盯着拼写硬想更接近真实回忆场景。
+                // 只在这里读，点「看释义」不再重读（刚读过两遍，再读会吵）。
+                onSpeakTwice(next.spelling)
             }
         }
     }

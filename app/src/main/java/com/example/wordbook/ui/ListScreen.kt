@@ -519,7 +519,12 @@ fun WordBookApp(
         StatsDetailDialog(stats = stats, onClose = { showStatsDetail = false })
     }
     if (showQuiz != null) {
-        QuizDialog(vm = vm, onSpeak = onSpeak, onClose = { showQuiz = null })
+        QuizDialog(
+            vm = vm,
+            onSpeak = onSpeak,
+            onSpeakTwice = onSpeakTwice,
+            onClose = { showQuiz = null }
+        )
     }
     detailWord?.let { word ->
         WordDetailDialog(

@@ -14,8 +14,8 @@ android {
         applicationId = "com.example.wordbook"
         minSdk = 26
         targetSdk = 34
-        versionCode = 13
-        versionName = "0.3.3"
+        versionCode = 14
+        versionName = "0.3.4"
     }
 
     // 签名密钥不进仓库（见 .gitignore）：本机若放了 app/keystore/wordbook.keystore，
@@ -85,7 +85,7 @@ android {
 
 // 产物文件名带上项目名与版本：dist/WordBook-v0.1-debug.apk / dist/WordBook-v0.1-release.apk
 // （AGP 8.5 未暴露 VariantOutput.outputFileName 公共 API，用构建后复制到 dist/ 的方案）
-val appVersionName: String = "0.3.3"
+val appVersionName: String = "0.3.4"
 val distDir = rootProject.layout.projectDirectory.dir("dist")
 
 tasks.register<Copy>("distDebug") {
