@@ -33,6 +33,7 @@ class MainActivity : ComponentActivity() {
     private val vm: WordBookViewModel by viewModels()
 
     private var pendingSpeak: String? = null
+    private var pendingSpeakTimes = 1
 
     private var pendingWord by mutableStateOf<String?>(null)
     private var pendingAdd by mutableStateOf(false)
@@ -57,6 +58,8 @@ class MainActivity : ComponentActivity() {
                     WordBookApp(
                         vm = vm,
                         onSpeak = { spelling -> speak(spelling) },
+                        // 复习时点「显示释义」：连读两遍，加深"声音 ↔ 释义"的绑定
+                        onSpeakTwice = { spelling -> speak(spelling, times = 2) },
                         pendingWord = pendingWord,
                         pendingAdd = pendingAdd,
                         pendingReview = pendingReview,
@@ -132,13 +135,15 @@ class MainActivity : ComponentActivity() {
         TtsController.init(this)
     }
 
-    private fun speak(text: String) {
+    /** 朗读；[times] > 1 表示连读多遍（复习里点「显示释义」用 2 遍） */
+    private fun speak(text: String, times: Int = 1) {
         if (TtsController.isReady()) {
-            TtsController.speak(text)
+            TtsController.speak(text, times)
             return
         }
-        // 引擎尚未就绪：重建一次并记下这次要读的内容（用户切完引擎回来点喇叭即可用）
+        // 引擎尚未就绪：重建一次并记下这次要读的内容与遍数（用户切完引擎回来点喇叭即可用）
         pendingSpeak = text
+        pendingSpeakTimes = times
         TtsController.shutdown()
         TtsController.init(this)
     }
@@ -152,7 +157,8 @@ class MainActivity : ComponentActivity() {
         val text = pendingSpeak ?: return
         if (TtsController.isReady()) {
             pendingSpeak = null
-            TtsController.speak(text)
+            TtsController.speak(text, pendingSpeakTimes)
+            pendingSpeakTimes = 1
         }
     }
 

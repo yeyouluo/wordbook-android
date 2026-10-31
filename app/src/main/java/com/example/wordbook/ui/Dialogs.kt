@@ -70,7 +70,13 @@ import com.example.wordbook.util.TtsController
  * - 分页：每页 10 个，上一页/下一页 + 「第 x / y 页（本页 n 个）」；答过的词立即移出，下一页自动顶替
  */
 @Composable
-fun ReviewDialog(vm: WordBookViewModel, onSpeak: (String) -> Unit, onClose: () -> Unit) {
+fun ReviewDialog(
+    vm: WordBookViewModel,
+    onSpeak: (String) -> Unit,
+    onClose: () -> Unit,
+    // 点「显示释义」时用：连读两遍（默认退化成单遍，保证既有调用点不受影响）
+    onSpeakTwice: (String) -> Unit = onSpeak
+) {
     val stats by vm.stats.collectAsState()
     val recallFirst = remember { vm.reviewRecallFirst() }
     // wordId -> 是否已展开释义（答过的词会被移出列表，这里的记录随词条消失）
@@ -147,7 +153,13 @@ fun ReviewDialog(vm: WordBookViewModel, onSpeak: (String) -> Unit, onClose: () -
                                         }
                                     }
                                     if (!shown) {
-                                        TextButton(onClick = { revealed[word.id] = true }) {
+                                        TextButton(onClick = {
+                                            revealed[word.id] = true
+                                            // 显示释义的同时**连读两遍**单词：
+                                            // 复习时"听到发音 → 想起释义"比再点一次小喇叭更顺手，
+                                            // 读两遍是为了让发音有机会被真正听清（一遍常常只听个尾音）
+                                            onSpeakTwice(word.spelling)
+                                        }) {
                                             Text("显示释义", fontSize = 12.sp)
                                         }
                                     } else {

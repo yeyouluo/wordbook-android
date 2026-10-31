@@ -116,6 +116,8 @@ internal const val PROVIDER_PICKER_TAG = "provider_picker_list"
 fun WordBookApp(
     vm: WordBookViewModel = viewModel(),
     onSpeak: (String) -> Unit,
+    // 「显示释义」时的发音（连读两遍）；默认退回单遍，老调用点不必改
+    onSpeakTwice: (String) -> Unit = onSpeak,
     pendingWord: String?,
     pendingAdd: Boolean,
     pendingReview: Boolean,
@@ -506,7 +508,12 @@ fun WordBookApp(
         ChatScreen(vm = vm, onClose = { showChat = false })
     }
     if (showReview) {
-        ReviewDialog(vm = vm, onSpeak = onSpeak, onClose = { showReview = false })
+        ReviewDialog(
+            vm = vm,
+            onSpeak = onSpeak,
+            onSpeakTwice = onSpeakTwice,
+            onClose = { showReview = false }
+        )
     }
     if (showStatsDetail) {
         StatsDetailDialog(stats = stats, onClose = { showStatsDetail = false })

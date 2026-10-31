@@ -150,8 +150,25 @@ object TtsController {
         speak(text)
     }
 
-    fun speak(text: String) {
+    /**
+     * 朗读 [text]，[times] > 1 时**连读多遍**。
+     *
+     * 第一遍用 QUEUE_FLUSH（打断上一条，保证用户每次点击立刻有反应），
+     * 后续几遍用 QUEUE_ADD 排队 —— 若每遍都用 FLUSH，后一遍会把前一遍掐断，听起来只有"半句"。
+     */
+    fun speak(text: String, times: Int = 1) {
         val engine = tts ?: return
-        engine.speak(text, TextToSpeech.QUEUE_FLUSH, null, "wordbook_tts")
+        val repeat = times.coerceIn(1, MAX_REPEAT)
+        repeat(repeat) { i ->
+            engine.speak(
+                text,
+                if (i == 0) TextToSpeech.QUEUE_FLUSH else TextToSpeech.QUEUE_ADD,
+                null,
+                "wordbook_tts_$i"
+            )
+        }
     }
+
+    /** 连读上限：防止调用方传个离谱的值把队列塞满 */
+    const val MAX_REPEAT = 3
 }
